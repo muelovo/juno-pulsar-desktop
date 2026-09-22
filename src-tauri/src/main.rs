@@ -266,7 +266,7 @@ fn main() {
             list_skins,
             import_skin,
             load_skin,
-            publish_sprite,
+            publish_sprites,
             input_frame,
             pointer,
             probe,
@@ -286,6 +286,7 @@ struct Frame {
     y: i32,
     left: bool,
     cancel: bool,
+    captured: Option<u32>,
     origin_x: i32,
     origin_y: i32,
     scale: f64,
@@ -295,6 +296,13 @@ struct Frame {
 fn input_frame(window: tauri::WebviewWindow) -> Result<Frame, String> {
     only(&window, "overlay")?;
     let p = desktop::pointer().map_err(|_| "pointer")?;
+    let (accepted, rejected) = desktop::input::drain_diagnostics();
+    if accepted > 0 {
+        log::info!("input capture accepted count={accepted}");
+    }
+    if rejected > 0 {
+        log::warn!("input capture surface_rejected count={rejected}");
+    }
     let hwnd = windows::Win32::Foundation::HWND(window.hwnd().map_err(|_| "hwnd")?.0);
     let mut origin = windows::Win32::Foundation::POINT::default();
     let mut fullscreen = false;
@@ -325,6 +333,7 @@ fn input_frame(window: tauri::WebviewWindow) -> Result<Frame, String> {
         y: p.y,
         left: p.left,
         cancel: p.cancel,
+        captured: desktop::input::captured(window.label()),
         origin_x: origin.x,
         origin_y: origin.y,
         scale: window.scale_factor().map_err(|_| "dpi")?,
@@ -332,14 +341,43 @@ fn input_frame(window: tauri::WebviewWindow) -> Result<Frame, String> {
     })
 }
 
+#[derive(serde::Deserialize)]
+struct SpriteRegion {
+    index: u32,
+    x: f64,
+    y: f64,
+    radius: f64,
+}
+
 #[tauri::command]
-fn publish_sprite(window: tauri::WebviewWindow, x: f64, y: f64, r: f64) -> Result<(), String> {
+fn publish_sprites(window: tauri::WebviewWindow, regions: Vec<SpriteRegion>) -> Result<(), String> {
     only(&window, "overlay")?;
-    if !x.is_finite() || !y.is_finite() || !r.is_finite() || !(0.0..=512.).contains(&r) {
+    if regions.len() > 3
+        || regions.iter().any(|region| {
+            region.index >= 3
+                || !region.x.is_finite()
+                || !region.y.is_finite()
+                || !region.radius.is_finite()
+                || !(0.0..=512.).contains(&region.radius)
+        })
+    {
         return Err("invalid_hit_region".into());
     }
     if window.is_visible().unwrap_or(false) {
-        desktop::input::publish(window.label(), x, y, r);
+        let hwnd = windows::Win32::Foundation::HWND(window.hwnd().map_err(|_| "hwnd")?.0);
+        desktop::input::publish(
+            window.label(),
+            hwnd,
+            regions
+                .into_iter()
+                .map(|region| desktop::input::HitRegion {
+                    index: region.index,
+                    x: region.x,
+                    y: region.y,
+                    radius: region.radius,
+                })
+                .collect(),
+        );
     }
     Ok(())
 }

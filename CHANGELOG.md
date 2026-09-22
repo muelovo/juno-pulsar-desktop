@@ -2,6 +2,18 @@
 
 All notable changes follow SemVer. Version 0.x is an evolving development preview.
 
+## [0.1.1] - 2026-09-23
+
+### Fixed
+- Register independent native hit regions for every visible companion, so quantity 2/3 remains interactive.
+- Return the captured companion index from the native hook and keep that exact companion attached during lock and drag.
+- Accept the app's click-through overlay and current Explorer desktop surface in bottom-window fallback mode while still rejecting ordinary Explorer windows and the taskbar.
+- Record path-free counters when a sprite press is accepted or rejected by desktop-surface validation.
+
+### Validation
+- Added a native three-region selection test; 21 Rust tests and 6 frontend state tests pass.
+- Real non-injected pointer behavior still requires manual verification on each Windows desktop configuration.
+
 ## [0.1.0] - 2026-09-22
 
 ### Added

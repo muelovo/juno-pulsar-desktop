@@ -50,6 +50,7 @@ export interface Frame {
   y: number;
   left: boolean;
   cancel: boolean;
+  captured: number | null;
   origin_x: number;
   origin_y: number;
   scale: number;

@@ -6,6 +6,8 @@ Record OS build, WebView2 version, display layouts and date. Each unchecked item
 - [ ] Test WorkerW mode and forced fallback mode. Normal applications cover the companion; Win+D remains usable.
 - [ ] Click/double-click/drag 20 desktop icons outside sprite: no lost events.
 - [ ] Hold sprite 249ms then release: no lock/confirmation. Hold 250ms: lock indication.
+- [ ] Set quantity to 3. Capture and drag each of the three companions separately; the pressed companion, not the first companion, must follow the pointer.
+- [ ] Repeat capture in WorkerW mode and bottom-window fallback mode. A sprite over an ordinary app window or taskbar must not capture.
 - [ ] Drag captured sprite: no Explorer selection rectangle or underlying icon drag.
 - [ ] Target a disposable desktop file; hover 599ms and release: no confirmation.
 - [ ] Hover 600ms and release: exact filename/type/path; Cancel default focus. Cancel via button/Esc/right click/title close.
@@ -23,3 +25,5 @@ Record OS build, WebView2 version, display layouts and date. Each unchecked item
 - [ ] Skin: valid folder and .jpskin import; switch/restart; invalid manifest, duplicate paths, traversal, symlinks, scripts, executables, ZIP bombs, oversized image/frame count: reject without partial installation.
 - [ ] Run 2 hours at 30 FPS; record memory/CPU, sleep/resume, monitor changes.
 - [ ] NSIS install/uninstall per-user; portable on clean Windows with WebView2; current-user startup toggle.
+
+If capture still fails, inspect `%APPDATA%/org.junopulsar.desktop/diagnostics.log`. A successful press records `input capture accepted`; a geometric hit rejected because another window covers the desktop records `input capture surface_rejected`. The log does not contain coordinates, filenames or paths.

@@ -65,6 +65,8 @@ export function Flight({
       state: State = initial();
     let pos = { x: 0, y: 0 },
       velocity = { x: 0, y: 0 },
+      activeIndex: number | null = null,
+      positions = Array.from({ length: 3 }, () => ({ x: 0, y: 0 })),
       p: Frame | null = null;
     const unlisteners: (() => void)[] = [];
     if (native && !preview) {
@@ -74,6 +76,7 @@ export function Flight({
           () => {
             state = initial();
             target = null;
+            activeIndex = null;
             setLabel("");
           },
         ],
@@ -83,6 +86,7 @@ export function Flight({
             state = e.payload.recycled
               ? { ...initial(), phase: "hit", since: performance.now() }
               : initial();
+            if (!e.payload.recycled) activeIndex = null;
             setLabel(e.payload.recycled ? zh.hit : "操作未完成");
           },
         ],
@@ -100,16 +104,29 @@ export function Flight({
         if (stopped) return;
         const x = (p.x - p.origin_x) / p.scale,
           y = (p.y - p.origin_y) / p.scale;
-        await invoke("publish_sprite", {
-          x: p.origin_x + pos.x * p.scale,
-          y: p.origin_y + pos.y * p.scale,
-          r:
-            state.phase === "idle" &&
-            !config.paused &&
-            !(config.fullscreen_pause && p.fullscreen)
-              ? 30 * config.size * p.scale
-              : 0,
+        const captureEnabled =
+          state.phase === "idle" &&
+          !config.paused &&
+          !(config.fullscreen_pause && p.fullscreen);
+        await invoke("publish_sprites", {
+          regions: captureEnabled
+            ? positions.slice(0, config.count).map((position, index) => ({
+                index,
+                x: p!.origin_x + position.x * p!.scale,
+                y: p!.origin_y + position.y * p!.scale,
+                radius: 34 * config.size * p!.scale,
+              }))
+            : [],
         });
+        if (
+          state.phase === "idle" &&
+          p.captured !== null &&
+          p.captured < config.count
+        ) {
+          activeIndex = p.captured;
+          pos = { ...positions[activeIndex] };
+          velocity = { x: 0, y: 0 };
+        }
         const locked = state.phase === "locked" || state.phase === "target";
         if (locked && p.left && config.deletion && now - probeAt > 100) {
           probeAt = now;
@@ -129,9 +146,12 @@ export function Flight({
             p.cancel ||
             config.paused ||
             (config.fullscreen_pause && p.fullscreen),
-          over: Math.hypot(x - pos.x, y - pos.y) < 30 * config.size,
+          over:
+            activeIndex !== null &&
+            Math.hypot(x - pos.x, y - pos.y) < 40 * config.size,
           target: target?.path ?? null,
         });
+        if (state.phase === "idle" && before !== "idle") activeIndex = null;
         if (before !== state.phase) {
           setLabel(
             state.phase === "locked"
@@ -200,10 +220,7 @@ export function Flight({
           0.48 * r.height,
         ),
       };
-      if (state.phase === "idle" || preview) {
-        pos = flight;
-        velocity = { x: 0, y: 0 };
-      } else if ((state.phase === "locked" || state.phase === "target") && p) {
+      if ((state.phase === "locked" || state.phase === "target") && p) {
         const tx = (p.x - p.origin_x) / p.scale,
           ty = (p.y - p.origin_y) / p.scale;
         velocity.x += (tx - pos.x) * 80 * dt;
@@ -214,25 +231,29 @@ export function Flight({
         pos.y += velocity.y * dt;
       }
       for (let n = 0; n < config.count; n++) {
-        const x =
-            n === 0
-              ? pos.x
-              : r.width * (0.5 + 0.28 * Math.sin(clock / 5 + n * 2)),
-          y =
-            n === 0 ? pos.y : r.height * (0.5 + 0.2 * Math.sin(clock / 3 + n));
-        const angle =
-          state.phase === "idle" ? Math.sin(clock / 4 + n) * 0.45 : 0;
+        const idle =
+          n === 0
+            ? flight
+            : {
+                x: r.width * (0.5 + 0.28 * Math.sin(clock / 5 + n * 2)),
+                y: r.height * (0.5 + 0.2 * Math.sin(clock / 3 + n)),
+              };
+        const isActive = activeIndex === n && !preview;
+        const position = isActive && state.phase !== "idle" ? pos : idle;
+        positions[n] = { ...position };
+        const phase = isActive ? state.phase : "idle";
+        const angle = phase === "idle" ? Math.sin(clock / 4 + n) * 0.45 : 0;
         ctx.save();
-        ctx.translate(x, y);
+        ctx.translate(position.x, position.y);
         ctx.rotate(angle);
         ctx.scale(
-          config.size * (state.phase === "locked" ? 1.1 : 1),
-          config.size * (state.phase === "locked" ? 1.1 : 1),
+          config.size * (phase === "locked" ? 1.1 : 1),
+          config.size * (phase === "locked" ? 1.1 : 1),
         );
         const skin = skinRef.current;
         if (skin) {
-          const key = ["locked", "target", "hit"].includes(state.phase)
-            ? state.phase
+          const key = ["locked", "target", "hit"].includes(phase)
+            ? phase
             : "idle";
           const a = skin.bundle.manifest.animations[key],
             img = skin.images[a.file];
@@ -255,7 +276,7 @@ export function Flight({
             (size * img.height) / fw,
           );
         } else {
-          drawSprite(ctx, config.trail, state.phase);
+          drawSprite(ctx, config.trail, phase);
         }
         ctx.restore();
       }

@@ -1,9 +1,10 @@
 //! A dedicated message thread owns the low-level hook. No DLL injection, no elevation.
-//! Only a press on our fresh, visible sprite over the actual desktop is consumed.
+//! Only a press on a fresh sprite hit region over the desktop/our click-through layer is consumed.
 use std::{
+    collections::HashMap,
     sync::{
-        atomic::{AtomicBool, Ordering},
-        Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        LazyLock, Mutex,
     },
     time::{Duration, Instant},
 };
@@ -11,100 +12,232 @@ use windows::{
     core::*,
     Win32::{Foundation::*, System::Threading::GetCurrentThreadId, UI::WindowsAndMessaging::*},
 };
-struct Region {
-    x: f64,
-    y: f64,
-    r: f64,
+
+#[derive(Clone, Copy)]
+pub struct HitRegion {
+    pub index: u32,
+    pub x: f64,
+    pub y: f64,
+    pub radius: f64,
+}
+
+struct PublishedRegions {
+    overlay: HWND,
+    sprites: Vec<HitRegion>,
     updated: Instant,
 }
-static REGION: std::sync::LazyLock<Mutex<std::collections::HashMap<String, Region>>> =
-    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+#[derive(Clone)]
+struct Capture {
+    owner: String,
+    index: u32,
+}
+
+// HWND is an opaque value. Access remains synchronized and the handle is only queried while
+// its owning overlay publishes fresh regions.
+unsafe impl Send for PublishedRegions {}
+
+static REGIONS: LazyLock<Mutex<HashMap<String, PublishedRegions>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static CAPTURE: LazyLock<Mutex<Option<Capture>>> = LazyLock::new(|| Mutex::new(None));
 static DOWN: AtomicBool = AtomicBool::new(false);
-static CAPTURED: AtomicBool = AtomicBool::new(false);
 static CANCEL: AtomicBool = AtomicBool::new(false);
 static RIGHT: AtomicBool = AtomicBool::new(false);
-pub fn publish(owner: &str, x: f64, y: f64, r: f64) {
-    if let Ok(mut hit) = REGION.lock() {
-        hit.retain(|_, r| r.updated.elapsed() < Duration::from_secs(2));
-        hit.insert(
+static ACCEPTED: AtomicU64 = AtomicU64::new(0);
+static SURFACE_REJECTED: AtomicU64 = AtomicU64::new(0);
+
+pub fn publish(owner: &str, overlay: HWND, sprites: Vec<HitRegion>) {
+    if let Ok(mut regions) = REGIONS.lock() {
+        regions.retain(|_, entry| entry.updated.elapsed() < Duration::from_secs(2));
+        regions.insert(
             owner.to_owned(),
-            Region {
-                x,
-                y,
-                r,
+            PublishedRegions {
+                overlay,
+                sprites,
                 updated: Instant::now(),
             },
         );
     }
 }
+
 pub fn left() -> bool {
     DOWN.load(Ordering::Relaxed)
 }
+
+pub fn captured(owner: &str) -> Option<u32> {
+    CAPTURE
+        .lock()
+        .ok()?
+        .as_ref()
+        .filter(|capture| capture.owner == owner)
+        .map(|capture| capture.index)
+}
+
 pub fn cancelled() -> bool {
     CANCEL.swap(false, Ordering::Relaxed)
 }
-unsafe extern "system" fn callback(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
+
+pub fn drain_diagnostics() -> (u64, u64) {
+    (
+        ACCEPTED.swap(0, Ordering::AcqRel),
+        SURFACE_REJECTED.swap(0, Ordering::AcqRel),
+    )
+}
+
+fn class_name(window: HWND) -> String {
+    let mut name = [0u16; 128];
+    // SAFETY: the stack buffer is valid for the duration of the read-only window query.
+    let count = unsafe { GetClassNameW(window, &mut name) };
+    String::from_utf16_lossy(&name[..count as usize])
+}
+
+fn is_desktop_surface(point: POINT, overlay: HWND) -> bool {
+    // SAFETY: all calls are read-only HWND/geometry queries. Stale handles simply fail closed.
+    unsafe {
+        let under = WindowFromPoint(point);
+        if under == overlay || IsChild(overlay, under).as_bool() {
+            return true;
+        }
+
+        let root = GetAncestor(under, GA_ROOT);
+        let root_class = class_name(root);
+        if ["CabinetWClass", "ExploreWClass", "Shell_TrayWnd"].contains(&root_class.as_str()) {
+            return false;
+        }
+
+        let progman = match FindWindowW(w!("Progman"), None) {
+            Ok(window) => window,
+            Err(_) => return false,
+        };
+        let mut desktop = HWND::default();
+        let _ = EnumWindows(
+            Some(find_desktop_list),
+            LPARAM((&mut desktop as *mut HWND) as isize),
+        );
+        if desktop.is_invalid() {
+            desktop = FindWindowExW(Some(progman), None, w!("SHELLDLL_DefView"), None)
+                .ok()
+                .and_then(|view| FindWindowExW(Some(view), None, w!("SysListView32"), None).ok())
+                .unwrap_or_default();
+        }
+        if desktop.is_invalid() {
+            return false;
+        }
+
+        let mut rect = RECT::default();
+        if GetWindowRect(desktop, &mut rect).is_err()
+            || !windows::Win32::Graphics::Gdi::PtInRect(
+                &raw const rect,
+                POINT {
+                    x: point.x,
+                    y: point.y,
+                },
+            )
+            .as_bool()
+        {
+            return false;
+        }
+
+        let mut desktop_pid = 0;
+        let mut under_pid = 0;
+        GetWindowThreadProcessId(desktop, Some(&mut desktop_pid));
+        GetWindowThreadProcessId(under, Some(&mut under_pid));
+        desktop_pid != 0 && desktop_pid == under_pid
+    }
+}
+
+unsafe extern "system" fn find_desktop_list(window: HWND, context: LPARAM) -> BOOL {
+    // SAFETY: EnumWindows invokes synchronously and context points to a live caller-owned HWND.
+    unsafe {
+        if let Ok(view) = FindWindowExW(Some(window), None, w!("SHELLDLL_DefView"), None) {
+            if let Ok(list) = FindWindowExW(Some(view), None, w!("SysListView32"), None) {
+                *(context.0 as *mut HWND) = list;
+                return FALSE;
+            }
+        }
+    }
+    TRUE
+}
+
+fn hit(point: POINT) -> Option<(String, u32, HWND)> {
+    let regions = REGIONS.try_lock().ok()?;
+    regions
+        .iter()
+        .filter(|(_, published)| published.updated.elapsed() < Duration::from_millis(250))
+        .flat_map(|(owner, published)| {
+            published.sprites.iter().filter_map(move |sprite| {
+                let distance = (point.x as f64 - sprite.x).hypot(point.y as f64 - sprite.y);
+                (distance < sprite.radius).then_some((
+                    distance,
+                    owner.clone(),
+                    sprite.index,
+                    published.overlay,
+                ))
+            })
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, owner, index, overlay)| (owner, index, overlay))
+}
+
+unsafe extern "system" fn callback(code: i32, message: WPARAM, data: LPARAM) -> LRESULT {
     // SAFETY: Windows guarantees MSLLHOOKSTRUCT for HC_ACTION, valid only during callback.
     unsafe {
         if code == HC_ACTION as i32 {
-            let m = &*(l.0 as *const MSLLHOOKSTRUCT);
-            if m.flags & LLMHF_INJECTED == 0 {
-                match w.0 as u32 {
+            let mouse = &*(data.0 as *const MSLLHOOKSTRUCT);
+            if mouse.flags & LLMHF_INJECTED == 0 {
+                match message.0 as u32 {
                     WM_LBUTTONDOWN => {
-                        DOWN.store(true, Ordering::Relaxed);
-                        let hit = REGION
-                            .try_lock()
-                            .ok()
-                            .map(|regions| {
-                                regions.values().any(|r| {
-                                    r.updated.elapsed() < Duration::from_millis(180)
-                                        && ((m.pt.x as f64 - r.x).hypot(m.pt.y as f64 - r.y) < r.r)
-                                })
-                            })
-                            .unwrap_or(false);
-                        let under = WindowFromPoint(m.pt);
-                        let mut name = [0u16; 64];
-                        let n = GetClassNameW(under, &mut name);
-                        let class = String::from_utf16_lossy(&name[..n as usize]);
-                        let root = GetAncestor(under, GA_ROOT);
-                        let mut root_name = [0u16; 64];
-                        let count = GetClassNameW(root, &mut root_name);
-                        let root_class = String::from_utf16_lossy(&root_name[..count as usize]);
-                        if hit
-                            && ["Progman", "WorkerW"].contains(&root_class.as_str())
-                            && ["SysListView32", "WorkerW", "Progman"].contains(&class.as_str())
-                        {
-                            CAPTURED.store(true, Ordering::Relaxed);
-                            return LRESULT(1);
+                        DOWN.store(true, Ordering::Release);
+                        if let Some((owner, index, overlay)) = hit(mouse.pt) {
+                            if is_desktop_surface(mouse.pt, overlay) {
+                                if let Ok(mut capture) = CAPTURE.try_lock() {
+                                    *capture = Some(Capture { owner, index });
+                                    ACCEPTED.fetch_add(1, Ordering::Relaxed);
+                                    return LRESULT(1);
+                                }
+                            } else {
+                                SURFACE_REJECTED.fetch_add(1, Ordering::Relaxed);
+                            }
                         }
                     }
                     WM_LBUTTONUP => {
-                        DOWN.store(false, Ordering::Relaxed);
-                        if CAPTURED.swap(false, Ordering::Relaxed) {
+                        DOWN.store(false, Ordering::Release);
+                        if CAPTURE
+                            .try_lock()
+                            .ok()
+                            .and_then(|mut capture| capture.take())
+                            .is_some()
+                        {
                             return LRESULT(1);
                         }
                     }
-                    WM_RBUTTONDOWN if CAPTURED.load(Ordering::Relaxed) => {
-                        CANCEL.store(true, Ordering::Relaxed);
-                        RIGHT.store(true, Ordering::Relaxed);
+                    WM_RBUTTONDOWN
+                        if CAPTURE
+                            .try_lock()
+                            .ok()
+                            .is_some_and(|capture| capture.is_some()) =>
+                    {
+                        CANCEL.store(true, Ordering::Release);
+                        RIGHT.store(true, Ordering::Release);
                         return LRESULT(1);
                     }
-                    WM_RBUTTONUP if RIGHT.swap(false, Ordering::Relaxed) => return LRESULT(1),
-
+                    WM_RBUTTONUP if RIGHT.swap(false, Ordering::AcqRel) => return LRESULT(1),
                     _ => {}
                 }
             }
         }
-        CallNextHookEx(None, code, w, l)
+        CallNextHookEx(None, code, message, data)
     }
 }
+
 pub struct Guard {
     thread: u32,
     join: Option<std::thread::JoinHandle<()>>,
 }
+
 impl Guard {
     pub fn start() -> Result<Self> {
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         let join = std::thread::spawn(move || {
             // SAFETY: hook and message queue are created and destroyed on this dedicated thread.
             unsafe {
@@ -113,17 +246,17 @@ impl Guard {
                 let thread = GetCurrentThreadId();
                 match SetWindowsHookExW(WH_MOUSE_LL, Some(callback), None, 0) {
                     Ok(hook) => {
-                        let _ = tx.send(Ok(thread));
+                        let _ = sender.send(Ok(thread));
                         while GetMessageW(&mut message, None, 0, 0).0 > 0 {}
                         let _ = UnhookWindowsHookEx(hook);
                     }
-                    Err(e) => {
-                        let _ = tx.send(Err(e.code()));
+                    Err(error) => {
+                        let _ = sender.send(Err(error.code()));
                     }
                 }
             }
         });
-        match rx.recv() {
+        match receiver.recv() {
             Ok(Ok(thread)) => Ok(Self {
                 thread,
                 join: Some(join),
@@ -136,14 +269,52 @@ impl Guard {
         }
     }
 }
+
 impl Drop for Guard {
     fn drop(&mut self) {
         // SAFETY: this id belongs to the live owned message thread.
         unsafe {
             let _ = PostThreadMessageW(self.thread, WM_QUIT, WPARAM(0), LPARAM(0));
         }
-        if let Some(j) = self.join.take() {
-            let _ = j.join();
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chooses_the_specific_sprite_that_was_pressed() {
+        let owner = "input-region-test";
+        publish(
+            owner,
+            HWND(std::ptr::dangling_mut()),
+            vec![
+                HitRegion {
+                    index: 0,
+                    x: 100.0,
+                    y: 100.0,
+                    radius: 30.0,
+                },
+                HitRegion {
+                    index: 1,
+                    x: 300.0,
+                    y: 200.0,
+                    radius: 30.0,
+                },
+                HitRegion {
+                    index: 2,
+                    x: 500.0,
+                    y: 400.0,
+                    radius: 30.0,
+                },
+            ],
+        );
+        assert_eq!(hit(POINT { x: 300, y: 200 }).map(|hit| hit.1), Some(1));
+        assert_eq!(hit(POINT { x: 500, y: 400 }).map(|hit| hit.1), Some(2));
+        assert!(hit(POINT { x: 700, y: 700 }).is_none());
     }
 }

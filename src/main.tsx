@@ -76,7 +76,7 @@ function App() {
         <span>
           <b className="mark">◉</b> JUNO / PULSAR DESKTOP
         </span>
-        <small>0.1.0 · 开发预览</small>
+        <small>0.1.1 · 开发预览</small>
       </header>
       <div className="heading">
         <div>
