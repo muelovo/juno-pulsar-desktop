@@ -1,0 +1,5 @@
+Original sample artwork in sample-skin is dedicated to the public domain under CC0 1.0 Universal:
+https://creativecommons.org/publicdomain/zero/1.0/
+
+Created procedurally for this repository, without extracting or copying game artwork.
+The rest of the application code is MIT licensed; see the repository LICENSE.
