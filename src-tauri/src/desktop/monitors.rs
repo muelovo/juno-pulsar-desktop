@@ -141,3 +141,21 @@ pub fn rebuild(app: &tauri::AppHandle) -> Result<(), String> {
     }
     Ok(())
 }
+pub fn maintain(app: &tauri::AppHandle) {
+    for (label, window) in app.webview_windows() {
+        if label != "overlay" && !label.starts_with("overlay-") {
+            continue;
+        }
+        let Ok(raw) = window.hwnd() else { continue };
+        let hwnd = windows::Win32::Foundation::HWND(raw.0);
+        // SAFETY: the handle belongs to this app. Parent and iconic state are read only.
+        unsafe {
+            if windows::Win32::UI::WindowsAndMessaging::GetParent(hwnd)
+                .map(|parent| parent.is_invalid())
+                .unwrap_or(true)
+            {
+                let _ = super::bottom(hwnd);
+            }
+        }
+    }
+}

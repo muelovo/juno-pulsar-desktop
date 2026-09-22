@@ -150,6 +150,10 @@ fn main() {
                                 log::error!("lifecycle_rebuild {code}");
                             }
                         });
+                    } else {
+                        let handle = lifecycle.clone();
+                        let _ = lifecycle
+                            .run_on_main_thread(move || desktop::monitors::maintain(&handle));
                     }
                 }
             });

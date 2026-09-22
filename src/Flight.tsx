@@ -348,18 +348,14 @@ function orbitPosition(
   width: number,
   height: number,
 ) {
-  const phase = index * 2.399963;
-  const t = clock * (0.72 + (index % 4) * 0.045) + phase;
-  const lane = 0.68 + (index % 3) * 0.1;
+  const phase = (index * 0.61803398875) % 1;
+  const progress = (clock * (0.055 + (index % 3) * 0.006) + phase) % 1;
+  const lane = 0.17 + ((index * 3) % 7) * 0.105;
+  const arc = Math.sin(progress * Math.PI * 2 + index * 0.72);
+  const bob = Math.sin(progress * Math.PI * 6 + index) * 0.018;
   return {
-    x:
-      width *
-      (0.5 + lane * 0.43 * Math.sin(t) + 0.045 * Math.sin(t * 2.7 + phase)),
-    y:
-      height *
-      (0.5 +
-        lane * 0.34 * Math.sin(t * 1.63 + phase * 0.45) +
-        0.035 * Math.cos(t * 3.2)),
+    x: width * (-0.1 + progress * 1.2),
+    y: height * (lane + arc * 0.055 + bob),
   };
 }
 function drawBuiltinSprite(

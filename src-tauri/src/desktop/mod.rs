@@ -38,29 +38,19 @@ pub fn attach(hwnd: HWND) -> Result<&'static str> {
         if sent.0 == 0 {
             return Err(NativeError::at("workerw_timeout", Error::from_win32()));
         }
-        let mut desktop_host = HWND::default();
+        let mut worker = HWND::default();
         EnumWindows(
-            Some(find_desktop_host),
-            LPARAM((&mut desktop_host as *mut HWND) as isize),
+            Some(find_worker),
+            LPARAM((&mut worker as *mut HWND) as isize),
         )
         .map_err(|e| NativeError::at("enum_windows", e))?;
-        let (parent, mode) = if desktop_host.is_invalid() {
-            (progman, "progman")
-        } else {
-            (desktop_host, "desktop_host")
-        };
-        SetParent(hwnd, Some(parent)).map_err(|e| NativeError::at("set_parent", e))?;
-        let extended = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        SetLastError(WIN32_ERROR(0));
-        let old_extended = SetWindowLongPtrW(
-            hwnd,
-            GWL_EXSTYLE,
-            extended | WS_EX_TOOLWINDOW.0 as isize | WS_EX_NOACTIVATE.0 as isize,
-        );
-        if old_extended == 0 && GetLastError().0 != 0 {
-            let _ = SetParent(hwnd, None);
-            return Err(NativeError::at("desktop_ex_style", Error::from_win32()));
+        if worker.is_invalid() {
+            return Err(NativeError::at(
+                "workerw_missing",
+                Error::from_hresult(E_FAIL),
+            ));
         }
+        SetParent(hwnd, Some(worker)).map_err(|e| NativeError::at("set_parent", e))?;
         let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
         SetLastError(WIN32_ERROR(0));
         let old = SetWindowLongPtrW(
@@ -72,8 +62,19 @@ pub fn attach(hwnd: HWND) -> Result<&'static str> {
             let _ = SetParent(hwnd, None);
             return Err(NativeError::at("child_style", Error::from_win32()));
         }
-        Ok(mode)
+        Ok("workerw")
     }
+}
+unsafe extern "system" fn find_worker(window: HWND, context: LPARAM) -> BOOL {
+    // SAFETY: EnumWindows invokes synchronously; context points to the caller's valid HWND.
+    unsafe {
+        if FindWindowExW(Some(window), None, w!("SHELLDLL_DefView"), None).is_ok() {
+            if let Ok(worker) = FindWindowExW(None, Some(window), w!("WorkerW"), None) {
+                *(context.0 as *mut HWND) = worker;
+            }
+        }
+    }
+    TRUE
 }
 unsafe extern "system" fn find_desktop_host(window: HWND, context: LPARAM) -> BOOL {
     // SAFETY: EnumWindows invokes synchronously; context points to the caller's valid HWND.
@@ -101,6 +102,19 @@ pub fn host_signature() -> isize {
 pub fn bottom(hwnd: HWND) -> Result<()> {
     // SAFETY: only positioning our live window; no external window is modified.
     unsafe {
+        let extended = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        SetLastError(WIN32_ERROR(0));
+        let old = SetWindowLongPtrW(
+            hwnd,
+            GWL_EXSTYLE,
+            extended | WS_EX_TOOLWINDOW.0 as isize | WS_EX_NOACTIVATE.0 as isize,
+        );
+        if old == 0 && GetLastError().0 != 0 {
+            return Err(NativeError::at("fallback_ex_style", Error::from_win32()));
+        }
+        if IsIconic(hwnd).as_bool() {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+        }
         SetWindowPos(
             hwnd,
             Some(HWND_BOTTOM),
