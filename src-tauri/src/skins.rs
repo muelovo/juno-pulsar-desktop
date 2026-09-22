@@ -321,6 +321,9 @@ mod tests {
 }
 
 fn reject_animated_png(bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() < 33 || &bytes[12..16] != b"IHDR" || bytes[24] != 8 {
+        return Err("skin_png_8bit_required".into());
+    }
     let mut offset = 8usize;
     while offset.checked_add(12).is_some_and(|n| n <= bytes.len()) {
         let length = u32::from_be_bytes(
@@ -332,6 +335,15 @@ fn reject_animated_png(bytes: &[u8]) -> Result<(), String> {
         if kind == b"acTL" {
             return Err("skin_use_sprite_sheet".into());
         }
+        // Compressed ancillary text/profiles are unnecessary for skin assets and can hide
+        // independent decompression bombs. Only bounded structural/color chunks are accepted.
+        if ![
+            b"IHDR", b"PLTE", b"IDAT", b"IEND", b"tRNS", b"sRGB", b"gAMA", b"cHRM", b"pHYs",
+        ]
+        .contains(&kind.try_into().map_err(|_| "skin_png_chunk")?)
+        {
+            return Err("skin_png_metadata_not_allowed".into());
+        }
         offset = offset
             .checked_add(length)
             .and_then(|n| n.checked_add(12))
@@ -339,8 +351,15 @@ fn reject_animated_png(bytes: &[u8]) -> Result<(), String> {
         if offset > bytes.len() {
             return Err("skin_png_chunk".into());
         }
+        if kind == b"IEND" {
+            return if length == 0 && offset == bytes.len() {
+                Ok(())
+            } else {
+                Err("skin_png_trailing_data".into())
+            };
+        }
     }
-    Ok(())
+    Err("skin_png_incomplete".into())
 }
 #[cfg(test)]
 mod integration_tests {
