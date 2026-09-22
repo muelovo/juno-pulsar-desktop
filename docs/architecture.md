@@ -9,4 +9,3 @@ Trust boundaries: untrusted webview arguments; untrusted archive bytes; mutable 
 No network or telemetry. Logs exclude names/paths and only contain operation codes. Existing root game images are local references excluded by .gitignore; no packaged source art. Original procedural placeholder uses white housing, cyan energy and orange fins, without copied geometry. Audio is not included.
 
 Tests must distinguish compile/unit checks from actual Windows Explorer integration. Publishing requires a configured GitHub repository; CI creates a draft release on SemVer tags. Do not claim a public Release exists merely because workflow files exist.
-

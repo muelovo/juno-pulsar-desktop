@@ -28,11 +28,12 @@ jobs:
           $cargo = (cargo metadata --no-deps --format-version 1 --manifest-path src-tauri/Cargo.toml | ConvertFrom-Json).packages[0].version
           if ($version -ne $tauri -or $version -ne $cargo) { throw "Manifest versions differ" }
       - run: npm ci
+      - run: npm run format:check
       - run: npm test
       - run: npm run build
       - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-      - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml -- -D warnings
+      - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
       - run: npm run tauri build
       - run: ./scripts/package-portable.ps1
       - name: Collect installers and hashes
@@ -53,5 +54,11 @@ jobs:
         shell: pwsh
         run: |
           $assets = @(Get-ChildItem release -File | Where-Object { $_.Extension -in ".exe", ".zip" -or $_.Name -eq "SHA256SUMS.txt" } | Select-Object -ExpandProperty FullName)
-          gh release create $env:GITHUB_REF_NAME --draft --prerelease --title "Juno Pulsar Desktop $env:GITHUB_REF_NAME" --notes-file CHANGELOG.md @assets
-
+          gh release view $env:GITHUB_REF_NAME --json isDraft > existing-release.json
+          if ($LASTEXITCODE -eq 0) {
+            if (-not (Get-Content existing-release.json -Raw | ConvertFrom-Json).isDraft) { throw "Refusing to replace published release assets" }
+            gh release upload $env:GITHUB_REF_NAME @assets --clobber
+          } else {
+            gh release create $env:GITHUB_REF_NAME --draft --prerelease --title "Juno Pulsar Desktop $env:GITHUB_REF_NAME" --notes-file docs/M3.md @assets
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Release upload failed" }

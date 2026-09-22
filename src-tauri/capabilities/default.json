@@ -1,2 +1,1 @@
 {"identifier":"local-events","description":"Local app event channel only; no filesystem, shell or network plugin access","windows":["settings","overlay","overlay-*","confirm"],"permissions":["core:event:allow-listen","core:event:allow-unlisten"]}
-
