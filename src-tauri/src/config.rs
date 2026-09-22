@@ -20,11 +20,11 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             speed: 1.,
-            count: 1,
+            count: 5,
             size: 1.,
             fps: 30,
             trail: 0.7,
-            sound: false,
+            sound: true,
             monitor: "primary".into(),
             deletion: false,
             autostart: false,
@@ -38,13 +38,12 @@ impl Config {
     pub fn validate(&self) -> Result<(), String> {
         if !self.speed.is_finite()
             || !(0.2..=3.).contains(&self.speed)
-            || !(1..=3).contains(&self.count)
+            || !(1..=10).contains(&self.count)
             || !self.size.is_finite()
             || !(0.5..=2.).contains(&self.size)
             || ![15, 30, 60].contains(&self.fps)
             || !self.trail.is_finite()
             || !(0.0..=1.).contains(&self.trail)
-            || self.sound
             || self.skin.len() > 80
             || self.monitor.len() > 200
         {
@@ -112,7 +111,8 @@ mod tests {
     fn safe_defaults() {
         let c = Config::default();
         assert!(!c.deletion);
-        assert!(!c.sound);
+        assert!(c.sound);
+        assert_eq!(c.count, 5);
         assert!(c.validate().is_ok())
     }
     #[test]

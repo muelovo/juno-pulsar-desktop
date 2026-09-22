@@ -18,11 +18,11 @@ export interface Config {
 }
 export const defaults: Config = {
   speed: 1,
-  count: 1,
+  count: 5,
   size: 1,
   fps: 30,
   trail: 0.7,
-  sound: false,
+  sound: true,
   monitor: "primary",
   deletion: false,
   autostart: false,
@@ -34,11 +34,6 @@ export interface Target {
   path: string;
   name: string;
   kind: string;
-}
-export interface Proposal {
-  token: string;
-  target: Target;
-  expires_seconds: number;
 }
 export interface Outcome {
   status: string;
@@ -58,7 +53,7 @@ export interface Frame {
 }
 export const zh = {
   locked: "脉冲飞雷已锁定",
-  hover: "悬停目标 600ms 后松开",
+  hover: "松开以移入回收站",
   confirm: "移入回收站",
   cancel: "取消",
   idle: "自由飞行",

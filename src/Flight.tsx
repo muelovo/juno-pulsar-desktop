@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { initial, step, bezier, State } from "./machine";
+import { initial, step, State } from "./machine";
+import idleUrl from "./assets/pulsar/idle.png";
+import lockedUrl from "./assets/pulsar/locked.png";
+import targetUrl from "./assets/pulsar/target.png";
+import hitUrl from "./assets/pulsar/hit.png";
+import trailUrl from "./assets/pulsar/trail.png";
 import {
   SkinBundle,
   Config,
@@ -12,6 +17,19 @@ import {
   zh,
   Outcome,
 } from "./api";
+const builtinImages = Object.fromEntries(
+  Object.entries({
+    idle: idleUrl,
+    locked: lockedUrl,
+    target: targetUrl,
+    hit: hitUrl,
+    trail: trailUrl,
+  }).map(([key, source]) => {
+    const image = new Image();
+    image.src = source;
+    return [key, image];
+  }),
+) as Record<string, HTMLImageElement>;
 export function Flight({
   preview = false,
   config = defaults,
@@ -43,7 +61,7 @@ export function Flight({
           if (!disposed) skinRef.current = { bundle, images };
         })
         .catch(() => {
-          if (!disposed) setLabel("皮肤无效，已回退到原创占位");
+          if (!disposed) setLabel("皮肤无效，已回退到原创星脉");
         });
     }
     return () => {
@@ -64,10 +82,43 @@ export function Flight({
       targetAt = 0,
       state: State = initial();
     let pos = { x: 0, y: 0 },
-      velocity = { x: 0, y: 0 },
       activeIndex: number | null = null,
-      positions = Array.from({ length: 3 }, () => ({ x: 0, y: 0 })),
+      positions = Array.from({ length: 10 }, () => ({ x: 0, y: 0 })),
       p: Frame | null = null;
+    let audio: AudioContext | null = null;
+    const sound = (kind: "capture" | "locked" | "launch") => {
+      if (!config.sound || preview) return;
+      try {
+        audio ??= new AudioContext();
+        const start = audio.currentTime;
+        const notes =
+          kind === "capture"
+            ? [420, 580]
+            : kind === "locked"
+              ? [640, 880, 1120]
+              : [920, 620, 300];
+        notes.forEach((frequency, index) => {
+          const oscillator = audio!.createOscillator();
+          const gain = audio!.createGain();
+          oscillator.type = kind === "launch" ? "sawtooth" : "sine";
+          oscillator.frequency.setValueAtTime(frequency, start + index * 0.055);
+          gain.gain.setValueAtTime(0.0001, start + index * 0.055);
+          gain.gain.exponentialRampToValueAtTime(
+            0.07,
+            start + index * 0.055 + 0.012,
+          );
+          gain.gain.exponentialRampToValueAtTime(
+            0.0001,
+            start + index * 0.055 + 0.16,
+          );
+          oscillator.connect(gain).connect(audio!.destination);
+          oscillator.start(start + index * 0.055);
+          oscillator.stop(start + index * 0.055 + 0.17);
+        });
+      } catch {
+        // Audio feedback must never interfere with capture or recycle behavior.
+      }
+    };
     const unlisteners: (() => void)[] = [];
     if (native && !preview) {
       for (const [event, fn] of [
@@ -86,6 +137,7 @@ export function Flight({
             state = e.payload.recycled
               ? { ...initial(), phase: "hit", since: performance.now() }
               : initial();
+            if (e.payload.recycled) sound("launch");
             if (!e.payload.recycled) activeIndex = null;
             setLabel(e.payload.recycled ? zh.hit : "操作未完成");
           },
@@ -114,7 +166,7 @@ export function Flight({
                 index,
                 x: p!.origin_x + position.x * p!.scale,
                 y: p!.origin_y + position.y * p!.scale,
-                radius: 34 * config.size * p!.scale,
+                radius: 52 * config.size * p!.scale,
               }))
             : [],
         });
@@ -125,10 +177,10 @@ export function Flight({
         ) {
           activeIndex = p.captured;
           pos = { ...positions[activeIndex] };
-          velocity = { x: 0, y: 0 };
+          sound("capture");
         }
         const locked = state.phase === "locked" || state.phase === "target";
-        if (locked && p.left && config.deletion && now - probeAt > 100) {
+        if (locked && p.left && config.deletion && now - probeAt > 32) {
           probeAt = now;
           try {
             target = await invoke<Target | null>("probe");
@@ -148,11 +200,12 @@ export function Flight({
             (config.fullscreen_pause && p.fullscreen),
           over:
             activeIndex !== null &&
-            Math.hypot(x - pos.x, y - pos.y) < 40 * config.size,
+            Math.hypot(x - pos.x, y - pos.y) < 58 * config.size,
           target: target?.path ?? null,
         });
         if (state.phase === "idle" && before !== "idle") activeIndex = null;
         if (before !== state.phase) {
+          if (state.phase === "locked") sound("locked");
           setLabel(
             state.phase === "locked"
               ? zh.locked
@@ -161,16 +214,17 @@ export function Flight({
                 : state.phase === "pressing"
                   ? "正在捕获…"
                   : state.phase === "confirming"
-                    ? "请在确认窗口中操作"
+                    ? "正在移入回收站…"
                     : "",
           );
         }
         if (state.phase === "confirming" && before !== "confirming") {
           try {
-            await invoke("prepare");
+            await invoke("drop_recycle");
           } catch {
             state = initial();
-            setLabel("目标不可确认，已取消");
+            activeIndex = null;
+            setLabel("目标无法可靠解析，已取消");
           }
         }
       } catch {
@@ -203,46 +257,19 @@ export function Flight({
       ctx.setTransform(d, 0, 0, d, 0, 0);
       ctx.clearRect(0, 0, r.width, r.height);
       if (pause && !preview) return;
-      const u = (1 - Math.cos((clock * Math.PI) / 8)) / 2;
-      const flight = {
-        x: bezier(
-          u,
-          0.15 * r.width,
-          0.3 * r.width,
-          0.7 * r.width,
-          0.85 * r.width,
-        ),
-        y: bezier(
-          u,
-          0.52 * r.height,
-          0.08 * r.height,
-          0.92 * r.height,
-          0.48 * r.height,
-        ),
-      };
       if ((state.phase === "locked" || state.phase === "target") && p) {
-        const tx = (p.x - p.origin_x) / p.scale,
-          ty = (p.y - p.origin_y) / p.scale;
-        velocity.x += (tx - pos.x) * 80 * dt;
-        velocity.y += (ty - pos.y) * 80 * dt;
-        velocity.x *= Math.exp(-13 * dt);
-        velocity.y *= Math.exp(-13 * dt);
-        pos.x += velocity.x * dt;
-        pos.y += velocity.y * dt;
+        pos.x = (p.x - p.origin_x) / p.scale;
+        pos.y = (p.y - p.origin_y) / p.scale;
       }
       for (let n = 0; n < config.count; n++) {
-        const idle =
-          n === 0
-            ? flight
-            : {
-                x: r.width * (0.5 + 0.28 * Math.sin(clock / 5 + n * 2)),
-                y: r.height * (0.5 + 0.2 * Math.sin(clock / 3 + n)),
-              };
+        const idle = orbitPosition(n, clock, r.width, r.height);
+        const next = orbitPosition(n, clock + 0.035, r.width, r.height);
         const isActive = activeIndex === n && !preview;
         const position = isActive && state.phase !== "idle" ? pos : idle;
         positions[n] = { ...position };
         const phase = isActive ? state.phase : "idle";
-        const angle = phase === "idle" ? Math.sin(clock / 4 + n) * 0.45 : 0;
+        const angle =
+          phase === "idle" ? Math.atan2(next.y - idle.y, next.x - idle.x) : 0;
         ctx.save();
         ctx.translate(position.x, position.y);
         ctx.rotate(angle);
@@ -276,18 +303,13 @@ export function Flight({
             (size * img.height) / fw,
           );
         } else {
-          drawSprite(ctx, config.trail, phase);
+          drawBuiltinSprite(ctx, builtinImages, config.trail, phase);
         }
         ctx.restore();
       }
-      if (state.phase === "pressing" || state.phase === "target") {
-        const progress = Math.min(
-          1,
-          (now -
-            (state.phase === "pressing" ? state.since : state.hoverSince)) /
-            (state.phase === "pressing" ? 250 : 600),
-        );
-        ctx.strokeStyle = state.phase === "target" ? "#f9ad65" : "#73efff";
+      if (state.phase === "pressing") {
+        const progress = Math.min(1, (now - state.since) / 250);
+        ctx.strokeStyle = "#73efff";
         ctx.lineWidth = 3;
         ctx.beginPath();
         ctx.arc(
@@ -299,20 +321,15 @@ export function Flight({
         );
         ctx.stroke();
       }
-      if (labelRef.current && !preview) {
-        ctx.font = "14px Microsoft YaHei";
-        ctx.textAlign = "center";
-        ctx.fillStyle = "#0b1620";
-        ctx.fillRect(pos.x - 135, pos.y + 45, 270, 32);
-        ctx.fillStyle = "#edf6f7";
-        ctx.fillText(labelRef.current, pos.x, pos.y + 66);
-      }
+      if (labelRef.current && !preview)
+        drawStatusPill(ctx, pos.x, pos.y + 62, labelRef.current, state.phase);
     };
     raf = requestAnimationFrame(draw);
     return () => {
       stopped = true;
       cancelAnimationFrame(raf);
       unlisteners.forEach((u) => u());
+      void audio?.close();
     };
   }, [preview, config]);
   const labelRef = useRef(label);
@@ -325,48 +342,74 @@ export function Flight({
     />
   );
 }
-function drawSprite(
+function orbitPosition(
+  index: number,
+  clock: number,
+  width: number,
+  height: number,
+) {
+  const phase = index * 2.399963;
+  const t = clock * (0.72 + (index % 4) * 0.045) + phase;
+  const lane = 0.68 + (index % 3) * 0.1;
+  return {
+    x:
+      width *
+      (0.5 + lane * 0.43 * Math.sin(t) + 0.045 * Math.sin(t * 2.7 + phase)),
+    y:
+      height *
+      (0.5 +
+        lane * 0.34 * Math.sin(t * 1.63 + phase * 0.45) +
+        0.035 * Math.cos(t * 3.2)),
+  };
+}
+function drawBuiltinSprite(
   ctx: CanvasRenderingContext2D,
+  images: Record<string, HTMLImageElement>,
   trail: number,
   phase: string,
 ) {
-  ctx.shadowBlur = 22;
-  ctx.shadowColor = phase === "target" ? "#f9ad65" : "#73efff";
-  const g = ctx.createLinearGradient(-110, 0, 0, 0);
-  g.addColorStop(0, "transparent");
-  g.addColorStop(1, `rgba(115,239,255,${trail})`);
-  ctx.fillStyle = g;
+  const key = ["locked", "target", "hit"].includes(phase) ? phase : "idle";
+  if (!images[key].complete || !images.trail.complete) return;
+  ctx.globalAlpha = trail;
+  ctx.drawImage(images.trail, -142, -25, 126, 50);
+  ctx.globalAlpha = 1;
+  ctx.shadowBlur = phase === "idle" ? 8 : 20;
+  ctx.shadowColor = phase === "target" ? "#ff68b8" : "#52eeff";
+  ctx.drawImage(images[key], -58, -39, 116, 78);
+  ctx.shadowBlur = 0;
+}
+function drawStatusPill(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  text: string,
+  phase: string,
+) {
+  ctx.save();
+  ctx.font = "600 13px 'Microsoft YaHei', 'Segoe UI', sans-serif";
+  const width = Math.max(158, ctx.measureText(text).width + 54);
+  const left = x - width / 2;
+  const gradient = ctx.createLinearGradient(left, y, left + width, y);
+  gradient.addColorStop(0, "rgba(7,18,29,.94)");
+  gradient.addColorStop(1, "rgba(18,42,58,.94)");
+  ctx.shadowBlur = 18;
+  ctx.shadowColor = phase === "target" ? "#ff68b8" : "#52eeff";
+  ctx.fillStyle = gradient;
   ctx.beginPath();
-  ctx.moveTo(-115, 0);
-  ctx.lineTo(-18, -7);
-  ctx.lineTo(-18, 7);
-  ctx.fill();
-  ctx.fillStyle = "#edf6f7";
-  ctx.beginPath();
-  ctx.ellipse(0, 0, 25, 13, 0, 0, Math.PI * 2);
+  ctx.roundRect(left, y - 17, width, 34, 17);
   ctx.fill();
   ctx.shadowBlur = 0;
-  ctx.fillStyle = "#f9ad65";
-  for (const s of [-1, 1]) {
-    ctx.beginPath();
-    ctx.moveTo(-9, s * 8);
-    ctx.lineTo(-20, s * 25);
-    ctx.lineTo(9, s * 9);
-    ctx.fill();
-  }
-  ctx.fillStyle = "#193044";
+  ctx.strokeStyle = phase === "target" ? "#ff68b8" : "#52eeff";
+  ctx.globalAlpha = 0.8;
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = phase === "target" ? "#ff68b8" : "#52eeff";
   ctx.beginPath();
-  ctx.ellipse(8, 0, 9, 9, 0, 0, Math.PI * 2);
+  ctx.arc(left + 17, y, 4, 0, Math.PI * 2);
   ctx.fill();
-  ctx.fillStyle = "#73efff";
-  ctx.beginPath();
-  ctx.arc(10, 0, 5, 0, Math.PI * 2);
-  ctx.fill();
-  if (phase === "hit") {
-    ctx.strokeStyle = "#73efff";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(0, 0, 45, 0, Math.PI * 2);
-    ctx.stroke();
-  }
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#f4fbff";
+  ctx.fillText(text, x + 7, y);
+  ctx.restore();
 }

@@ -44,7 +44,7 @@ pub fn signature(app: &tauri::AppHandle) -> String {
         }
         pid
     };
-    format!("{pid}:{monitors}")
+    format!("{pid}:{}:{monitors}", super::host_signature())
 }
 pub fn rebuild(app: &tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<crate::AppState>();
@@ -100,7 +100,8 @@ pub fn rebuild(app: &tauri::AppHandle) -> Result<(), String> {
             .set_ignore_cursor_events(true)
             .map_err(|_| "click_through")?;
         let hwnd = windows::Win32::Foundation::HWND(layer.hwnd().map_err(|_| "hwnd")?.0);
-        let attached = super::attach(hwnd).is_ok();
+        let attach_mode = super::attach(hwnd).ok();
+        let attached = attach_mode.is_some();
         let mut point = windows::Win32::Foundation::POINT {
             x: m.position().x,
             y: m.position().y,
@@ -116,7 +117,11 @@ pub fn rebuild(app: &tauri::AppHandle) -> Result<(), String> {
             }
             windows::Win32::UI::WindowsAndMessaging::SetWindowPos(
                 hwnd,
-                Some(windows::Win32::UI::WindowsAndMessaging::HWND_BOTTOM),
+                Some(if attached {
+                    windows::Win32::UI::WindowsAndMessaging::HWND_TOP
+                } else {
+                    windows::Win32::UI::WindowsAndMessaging::HWND_BOTTOM
+                }),
                 point.x,
                 point.y,
                 m.size().width as i32,
@@ -129,7 +134,10 @@ pub fn rebuild(app: &tauri::AppHandle) -> Result<(), String> {
             super::bottom(hwnd).map_err(|_| "fallback")?;
         }
         layer.show().map_err(|_| "overlay_show")?;
-        log::info!("overlay attached={attached} display={i}");
+        log::info!(
+            "overlay attach_mode={} display={i}",
+            attach_mode.unwrap_or("fallback")
+        );
     }
     Ok(())
 }

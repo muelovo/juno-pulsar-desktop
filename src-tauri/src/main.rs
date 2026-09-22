@@ -22,17 +22,13 @@ fn pointer() -> desktop::Result<desktop::Pointer> {
     desktop::pointer()
 }
 #[tauri::command]
-async fn probe(
-    window: tauri::WebviewWindow,
-    state: tauri::State<'_, AppState>,
-) -> Result<Option<desktop::shell::Target>, String> {
+async fn probe(window: tauri::WebviewWindow) -> Result<Option<desktop::shell::Target>, String> {
     only(&window, "overlay")?;
     let p = desktop::pointer().map_err(|_| "pointer_unavailable")?;
     let target = tauri::async_runtime::spawn_blocking(move || desktop::shell::hit(p.x, p.y))
         .await
         .map_err(|_| "shell_worker")?
         .map_err(|e| format!("{}:{}", e.stage, e.code))?;
-    state.operations.observe(target.as_ref(), p.left);
     Ok(target)
 }
 #[tauri::command]
@@ -73,91 +69,43 @@ fn save_config(
     Ok(())
 }
 #[tauri::command]
-async fn prepare(
+fn cancel(app: tauri::AppHandle, state: tauri::State<AppState>) -> Result<(), String> {
+    state.operations.cancel();
+    app.emit("cancelled", ()).map_err(|_| "event_failed".into())
+}
+#[tauri::command]
+async fn drop_recycle(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
-) -> Result<operations::Proposal, String> {
+) -> Result<operations::Outcome, String> {
     only(&window, "overlay")?;
-    if !state
+    if !app
+        .state::<AppState>()
         .config
         .lock()
-        .map_err(|_| "state_unavailable")?
-        .deletion
+        .map(|config| config.deletion)
+        .unwrap_or(false)
     {
         return Err("deletion_disabled".into());
     }
-    let p = desktop::pointer().map_err(|_| "pointer_unavailable")?;
-    if p.left || p.cancel {
+    let pointer = desktop::pointer().map_err(|_| "pointer_unavailable")?;
+    if pointer.left || pointer.cancel {
         return Err("release_required".into());
     }
-    let target = tauri::async_runtime::spawn_blocking(move || desktop::shell::hit(p.x, p.y))
-        .await
-        .map_err(|_| "shell_worker")?
-        .map_err(|_| "target_unresolved")?
-        .ok_or("no_target")?;
-    let proposal = state.operations.prepare(target)?;
-    if let Some(w) = app.get_webview_window("confirm") {
-        w.show().map_err(|_| "confirm_show")?;
-        w.set_focus().map_err(|_| "confirm_focus")?;
-    } else {
-        tauri::WebviewWindowBuilder::new(
-            &app,
-            "confirm",
-            tauri::WebviewUrl::App("index.html?confirm".into()),
-        )
-        .title("确认移入回收站")
-        .inner_size(540., 420.)
-        .resizable(false)
-        .always_on_top(true)
-        .build()
-        .map_err(|_| "confirm_create")?;
-    }
-    app.emit_to("confirm", "proposal", &proposal)
-        .map_err(|_| "confirm_event")?;
-    Ok(proposal)
-}
-#[tauri::command]
-fn pending(
-    window: tauri::WebviewWindow,
-    state: tauri::State<AppState>,
-) -> Result<Option<operations::Proposal>, String> {
-    only(&window, "confirm")?;
-    Ok(state.operations.current())
-}
-#[tauri::command]
-async fn recycle(
-    window: tauri::WebviewWindow,
-    app: tauri::AppHandle,
-    token: String,
-) -> Result<operations::Outcome, String> {
-    only(&window, "confirm")?;
+    let target =
+        tauri::async_runtime::spawn_blocking(move || desktop::shell::hit(pointer.x, pointer.y))
+            .await
+            .map_err(|_| "shell_worker")?
+            .map_err(|_| "target_unresolved")?
+            .ok_or("no_target")?;
     let result = tauri::async_runtime::spawn_blocking({
         let app = app.clone();
-        move || {
-            let state = app.state::<AppState>();
-            if !state.config.lock().map(|c| c.deletion).unwrap_or(false) {
-                state.operations.cancel();
-            }
-            state.operations.execute(&token)
-        }
+        move || app.state::<AppState>().operations.recycle_target(target)
     })
     .await
     .map_err(|_| "worker_failed")?;
     let _ = app.emit("operation-result", &result);
     Ok(result)
-}
-#[tauri::command]
-fn cancel(
-    window: tauri::WebviewWindow,
-    app: tauri::AppHandle,
-    state: tauri::State<AppState>,
-) -> Result<(), String> {
-    state.operations.cancel();
-    if window.label() == "confirm" {
-        window.hide().map_err(|_| "hide_failed")?;
-    }
-    app.emit("cancelled", ()).map_err(|_| "event_failed".into())
 }
 fn main() {
     if std::env::args().any(|a| a == "--diagnose") {
@@ -251,13 +199,9 @@ fn main() {
         })
         .on_window_event(|w, e| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = e {
-                if w.label() == "settings" || w.label() == "confirm" {
+                if w.label() == "settings" {
                     api.prevent_close();
                     let _ = w.hide();
-                    if w.label() == "confirm" {
-                        w.state::<AppState>().operations.cancel();
-                        let _ = w.emit("cancelled", ());
-                    }
                 }
             }
         })
@@ -272,9 +216,7 @@ fn main() {
             probe,
             get_config,
             save_config,
-            prepare,
-            pending,
-            recycle,
+            drop_recycle,
             cancel
         ])
         .run(tauri::generate_context!())
@@ -352,9 +294,9 @@ struct SpriteRegion {
 #[tauri::command]
 fn publish_sprites(window: tauri::WebviewWindow, regions: Vec<SpriteRegion>) -> Result<(), String> {
     only(&window, "overlay")?;
-    if regions.len() > 3
+    if regions.len() > 10
         || regions.iter().any(|region| {
-            region.index >= 3
+            region.index >= 10
                 || !region.x.is_finite()
                 || !region.y.is_finite()
                 || !region.radius.is_finite()

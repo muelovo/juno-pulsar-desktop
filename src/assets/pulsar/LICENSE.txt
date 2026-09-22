@@ -1,0 +1,3 @@
+The PNG files in this directory are original assets generated for Juno Pulsar Desktop
+with the OpenAI image generation tool, then composited into UI states by the project.
+They are distributed under CC0-1.0. No source game image is included.

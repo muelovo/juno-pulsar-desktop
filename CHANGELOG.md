@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0] - 2026-09-23
+
+- Attach the overlay to the actual Progman/WorkerW desktop host so Win+D and closing windows do not minimize the companion or pause dynamic wallpaper.
+- Remove the 600ms target dwell and confirmation window from drag deletion; release over an exact Shell target now moves it directly to the Recycle Bin.
+- Make locked movement track the pointer without spring lag and poll desktop targets at interactive speed.
+- Add a new original generated pulse-drone skin, phase effects, refined status pill, procedural lock/launch sounds, orbital flight paths, and support for up to ten companions.
+
 All notable changes follow SemVer. Version 0.x is an evolving development preview.
 
 ## [0.1.1] - 2026-09-23

@@ -37,9 +37,7 @@ export function step(s: State, i: Input): State {
       : { ...s, wasDown: true };
   }
   if (!i.down)
-    return s.phase === "target" &&
-      i.target === s.target &&
-      i.now - s.hoverSince >= 600
+    return s.phase === "target" && i.target === s.target
       ? { ...s, phase: "confirming", wasDown: false }
       : reset;
   if (!i.target)

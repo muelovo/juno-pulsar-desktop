@@ -6,8 +6,6 @@ import {
   SkinManifest,
   Config,
   defaults,
-  Proposal,
-  Outcome,
   invoke,
   listen,
   native,
@@ -68,7 +66,6 @@ function App() {
       setMsg("设置保存失败，请检查配置与本地权限");
     }
   };
-  if (location.search.includes("confirm")) return <Confirm />;
   if (location.search.includes("overlay")) return <Flight config={c} />;
   return (
     <main>
@@ -76,7 +73,7 @@ function App() {
         <span>
           <b className="mark">◉</b> JUNO / PULSAR DESKTOP
         </span>
-        <small>0.1.1 · 开发预览</small>
+        <small>0.2.0 · 开发预览</small>
       </header>
       <div className="heading">
         <div>
@@ -93,11 +90,12 @@ function App() {
       <section className="preview">
         <div className="preview-caption">
           <span className="dot" /> {c.paused ? "已暂停" : "自由飞行"}
-          <small>原创占位皮肤 / CANVAS 2D</small>
+          <small>原创星脉皮肤 / CANVAS 2D</small>
         </div>
         <Flight preview config={c} />
         <div className="preview-bottom">
-          按住 250ms 捕获 <span>→</span> 悬停 600ms <span>→</span> 松开并确认
+          按住 250ms 捕获 <span>→</span> 指向桌面项目 <span>→</span>{" "}
+          松开移入回收站
         </div>
       </section>
       <div className="settings-grid">
@@ -140,11 +138,13 @@ function App() {
                 value={c.count}
                 onChange={(e) => void update({ ...c, count: +e.target.value })}
               >
-                {[1, 2, 3].map((n) => (
-                  <option key={n} value={n}>
-                    {n} 枚
-                  </option>
-                ))}
+                {Array.from({ length: 10 }, (_, index) => index + 1).map(
+                  (n) => (
+                    <option key={n} value={n}>
+                      {n} 枚
+                    </option>
+                  ),
+                )}
               </select>
             </label>
             <label>
@@ -168,7 +168,7 @@ function App() {
           </h2>
           <Toggle
             label="启用回收站操作"
-            note="默认关闭；启用后仍需逐次确认"
+            note="默认关闭；松手即移入回收站，可从回收站恢复"
             checked={c.deletion}
             onChange={(v) => void update({ ...c, deletion: v })}
           />
@@ -184,10 +184,12 @@ function App() {
             checked={c.autostart}
             onChange={(v) => void update({ ...c, autostart: v })}
           />
-          <div className="disabled-row">
-            <span>音效</span>
-            <small>暂无素材 · 未启用</small>
-          </div>
+          <Toggle
+            label="脉冲音效"
+            note="原创触发、锁定与发射反馈"
+            checked={c.sound}
+            onChange={(v) => void update({ ...c, sound: v })}
+          />
         </section>
       </div>
       <section className="panel library">
@@ -201,7 +203,7 @@ function App() {
               value={c.skin}
               onChange={(e) => void update({ ...c, skin: e.target.value })}
             >
-              <option value="builtin">原创脉冲 · 默认</option>
+              <option value="builtin">星脉巡弋 · 原创</option>
               {skins.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name} / {s.author}
@@ -232,7 +234,7 @@ function App() {
           <button disabled={!native} onClick={() => void importSkin(true)}>
             从目录导入
           </button>
-          <small>PNG 图集 · 本地校验 · 不含音效</small>
+          <small>PNG 图集 · 本地严格校验</small>
         </div>
       </section>
       <footer>
@@ -275,99 +277,6 @@ function Toggle({
         onChange={(e) => onChange(e.target.checked)}
       />
     </label>
-  );
-}
-function Confirm() {
-  const [p, setP] = useState<Proposal | null>(null),
-    [result, setResult] = useState<Outcome | null>(null),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
-  const cancel = () => {
-    if (!busy) void invoke("cancel");
-  };
-  useEffect(() => {
-    void invoke<Proposal | null>("pending")
-      .then(setP)
-      .catch(() => setError("确认信息不可用"));
-    const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") cancel();
-    };
-    document.addEventListener("keydown", key);
-    const menu = (e: MouseEvent) => {
-      e.preventDefault();
-      cancel();
-    };
-    document.addEventListener("contextmenu", menu);
-    return () => {
-      document.removeEventListener("keydown", key);
-      document.removeEventListener("contextmenu", menu);
-    };
-  }, [busy]);
-  useEffect(() => {
-    let gone = false;
-    let off: (() => void) | undefined;
-    void listen<Proposal>("proposal", (e) => {
-      setP(e.payload);
-      setResult(null);
-      setError("");
-    }).then((u) => (gone ? u() : (off = u)));
-    return () => {
-      gone = true;
-      off?.();
-    };
-  }, []);
-  const submit = async () => {
-    if (!p || busy) return;
-    setBusy(true);
-    try {
-      setResult(await invoke<Outcome>("recycle", { token: p.token }));
-    } catch {
-      setError("无法执行操作，请重新捕获目标。");
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <main className="confirmation">
-      <span className="eyebrow">请确认目标</span>
-      <h1>
-        {result?.recycled
-          ? "已移入回收站"
-          : result
-            ? "操作未完成"
-            : "将此项目移入回收站？"}
-      </h1>
-      {p && (
-        <dl>
-          <dt>文件名</dt>
-          <dd>{p.target.name}</dd>
-          <dt>类型</dt>
-          <dd>{p.target.kind}</dd>
-          <dt>完整路径</dt>
-          <dd className="path">{p.target.path}</dd>
-        </dl>
-      )}
-      <p role="status">
-        {error ||
-          (result
-            ? result.recycled
-              ? "可从 Windows 回收站恢复。"
-              : `已拒绝或未确认回收：${result.code}`
-            : "确认有效期为 30 秒。不会使用永久删除。")}
-      </p>
-      <div className="actions">
-        <button autoFocus disabled={busy} onClick={cancel}>
-          {result ? "关闭" : "取消"}
-        </button>
-        <button
-          className="danger"
-          disabled={!p || busy || !!result}
-          onClick={() => void submit()}
-        >
-          {busy ? "正在处理…" : "移入回收站"}
-        </button>
-      </div>
-    </main>
   );
 }
 createRoot(document.getElementById("root")!).render(<App />);

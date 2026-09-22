@@ -12,17 +12,14 @@ describe("capture and release safety", () => {
     s = step(s, { ...input, now: 500 });
     expect(s.phase).toBe("idle");
   });
-  it("cannot confirm after short hover or changed target", () => {
+  it("drops immediately on release over the same resolved target", () => {
     const locked = { ...initial(), phase: "locked" as const };
     const s = step(locked, { ...input, target: "a", now: 300 });
-    expect(
-      step(s, { ...input, down: false, target: "a", now: 899 }).phase,
-    ).toBe("idle");
     expect(
       step(s, { ...input, down: false, target: "b", now: 1000 }).phase,
     ).toBe("idle");
     expect(
-      step(s, { ...input, down: false, target: "a", now: 900 }).phase,
+      step(s, { ...input, down: false, target: "a", now: 301 }).phase,
     ).toBe("confirming");
   });
   it("cancel wins over release", () => {
