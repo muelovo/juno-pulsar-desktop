@@ -76,29 +76,6 @@ unsafe extern "system" fn find_worker(window: HWND, context: LPARAM) -> BOOL {
     }
     TRUE
 }
-unsafe extern "system" fn find_desktop_host(window: HWND, context: LPARAM) -> BOOL {
-    // SAFETY: EnumWindows invokes synchronously; context points to the caller's valid HWND.
-    unsafe {
-        if !(*(context.0 as *mut HWND)).is_invalid() {
-            return TRUE;
-        }
-        if FindWindowExW(Some(window), None, w!("SHELLDLL_DefView"), None).is_ok() {
-            *(context.0 as *mut HWND) = window;
-        }
-    }
-    TRUE
-}
-pub fn host_signature() -> isize {
-    let mut desktop_host = HWND::default();
-    // SAFETY: EnumWindows is synchronous and the callback only stores a borrowed HWND value.
-    unsafe {
-        let _ = EnumWindows(
-            Some(find_desktop_host),
-            LPARAM((&mut desktop_host as *mut HWND) as isize),
-        );
-    }
-    desktop_host.0 as isize
-}
 pub fn bottom(hwnd: HWND) -> Result<()> {
     // SAFETY: only positioning our live window; no external window is modified.
     unsafe {

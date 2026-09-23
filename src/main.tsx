@@ -227,6 +227,35 @@ function App() {
             </select>
           </label>
         </div>
+        <div className="skin-slots">
+          <label>
+            每枚飞雷的皮肤
+            <small>留空时使用当前皮肤；可为多枚飞雷分别选择</small>
+          </label>
+          <div className="pair">
+            {Array.from({ length: c.count }, (_, index) => (
+              <label key={index}>
+                飞雷 {index + 1}
+                <select
+                  value={c.skins[index] ?? ""}
+                  onChange={(e) => {
+                    const next = [...c.skins];
+                    next[index] = e.target.value;
+                    void update({ ...c, skins: next });
+                  }}
+                >
+                  <option value="">跟随当前皮肤</option>
+                  <option value="builtin">星脉巡弋 · 原创</option>
+                  {skins.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} / {s.author}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ))}
+          </div>
+        </div>
         <div className="import-actions">
           <button disabled={!native} onClick={() => void importSkin(false)}>
             导入 .jpskin

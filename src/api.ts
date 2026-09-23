@@ -15,6 +15,7 @@ export interface Config {
   fullscreen_pause: boolean;
   paused: boolean;
   skin: string;
+  skins: string[];
 }
 export const defaults: Config = {
   speed: 1,
@@ -29,6 +30,7 @@ export const defaults: Config = {
   fullscreen_pause: true,
   paused: false,
   skin: "builtin",
+  skins: [],
 };
 export interface Target {
   path: string;

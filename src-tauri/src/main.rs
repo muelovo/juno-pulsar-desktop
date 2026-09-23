@@ -4,11 +4,15 @@ mod desktop;
 mod logging;
 mod operations;
 mod skins;
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
 use tauri::{Emitter, Manager};
 struct AppState {
     config: Mutex<config::Config>,
     operations: operations::Operations,
+    overlay_visible: AtomicBool,
 }
 fn only(window: &tauri::WebviewWindow, label: &str) -> Result<(), String> {
     if window.label() == label || (label == "overlay" && window.label().starts_with("overlay-")) {
@@ -134,6 +138,7 @@ fn main() {
             app.manage(AppState {
                 config: Mutex::new(config::load(&dir)),
                 operations: Default::default(),
+                overlay_visible: AtomicBool::new(true),
             });
             desktop::monitors::rebuild(app.handle()).map_err(std::io::Error::other)?;
             let lifecycle = app.handle().clone();
@@ -182,11 +187,17 @@ fn main() {
                         }
                     }
                     "visible" => {
-                        if let Some(w) = app.get_webview_window("overlay") {
-                            if w.is_visible().unwrap_or(false) {
-                                let _ = w.hide();
-                            } else {
-                                let _ = w.show();
+                        let visible = !app
+                            .state::<AppState>()
+                            .overlay_visible
+                            .fetch_xor(true, Ordering::SeqCst);
+                        for (label, window) in app.webview_windows() {
+                            if label == "overlay" || label.starts_with("overlay-") {
+                                if visible {
+                                    let _ = window.show();
+                                } else {
+                                    let _ = window.hide();
+                                }
                             }
                         }
                     }

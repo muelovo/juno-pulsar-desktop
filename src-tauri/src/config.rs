@@ -15,6 +15,7 @@ pub struct Config {
     pub fullscreen_pause: bool,
     pub paused: bool,
     pub skin: String,
+    pub skins: Vec<String>,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -31,6 +32,7 @@ impl Default for Config {
             fullscreen_pause: true,
             paused: false,
             skin: "builtin".into(),
+            skins: Vec::new(),
         }
     }
 }
@@ -45,6 +47,8 @@ impl Config {
             || !self.trail.is_finite()
             || !(0.0..=1.).contains(&self.trail)
             || self.skin.len() > 80
+            || self.skins.len() > 10
+            || self.skins.iter().any(|skin| skin.len() > 80)
             || self.monitor.len() > 200
         {
             return Err("invalid_configuration".into());
@@ -121,6 +125,16 @@ mod tests {
             fps: 144,
             ..Config::default()
         };
+        assert!(c.validate().is_err())
+    }
+    #[test]
+    fn accepts_ten_skin_slots_and_rejects_more() {
+        let mut c = Config {
+            skins: (0..10).map(|index| format!("skin-{index}")).collect(),
+            ..Config::default()
+        };
+        assert!(c.validate().is_ok());
+        c.skins.push("one-too-many".into());
         assert!(c.validate().is_err())
     }
 }

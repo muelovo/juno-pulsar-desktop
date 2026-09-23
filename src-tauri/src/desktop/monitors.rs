@@ -44,13 +44,19 @@ pub fn signature(app: &tauri::AppHandle) -> String {
         }
         pid
     };
-    format!("{pid}:{}:{monitors}", super::host_signature())
+    // Win+D can replace/reorder WorkerW desktop hosts without restarting Explorer.
+    // Treating that transient HWND as identity destroyed healthy WebViews and could
+    // leave a fullscreen session without an overlay to restore. Explorer PID and
+    // monitor topology are the stable lifecycle boundaries we actually need.
+    format!("{pid}:{monitors}")
 }
 pub fn rebuild(app: &tauri::AppHandle) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
     let state = app.state::<crate::AppState>();
     state.operations.cancel();
     let _ = app.emit("cancelled", ());
     let selected = state.config.lock().map_err(|_| "state")?.monitor.clone();
+    let should_show = state.overlay_visible.load(Ordering::Relaxed);
     for (label, w) in app.webview_windows() {
         if label == "overlay" || label.starts_with("overlay-") {
             w.destroy().map_err(|_| "overlay_destroy")?;
@@ -133,7 +139,9 @@ pub fn rebuild(app: &tauri::AppHandle) -> Result<(), String> {
         if !attached {
             super::bottom(hwnd).map_err(|_| "fallback")?;
         }
-        layer.show().map_err(|_| "overlay_show")?;
+        if should_show {
+            layer.show().map_err(|_| "overlay_show")?;
+        }
         log::info!(
             "overlay attach_mode={} display={i}",
             attach_mode.unwrap_or("fallback")
@@ -142,6 +150,11 @@ pub fn rebuild(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 pub fn maintain(app: &tauri::AppHandle) {
+    use std::sync::atomic::Ordering;
+    let should_show = app
+        .state::<crate::AppState>()
+        .overlay_visible
+        .load(Ordering::Relaxed);
     for (label, window) in app.webview_windows() {
         if label != "overlay" && !label.starts_with("overlay-") {
             continue;
@@ -150,6 +163,17 @@ pub fn maintain(app: &tauri::AppHandle) {
         let hwnd = windows::Win32::Foundation::HWND(raw.0);
         // SAFETY: the handle belongs to this app. Parent and iconic state are read only.
         unsafe {
+            // Show Desktop can hide or minimize top-level tool windows. Reassert the
+            // non-activating overlay without stealing focus from a game or Explorer.
+            if should_show
+                && (!windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(hwnd).as_bool()
+                    || windows::Win32::UI::WindowsAndMessaging::IsIconic(hwnd).as_bool())
+            {
+                let _ = windows::Win32::UI::WindowsAndMessaging::ShowWindow(
+                    hwnd,
+                    windows::Win32::UI::WindowsAndMessaging::SW_SHOWNOACTIVATE,
+                );
+            }
             if windows::Win32::UI::WindowsAndMessaging::GetParent(hwnd)
                 .map(|parent| parent.is_invalid())
                 .unwrap_or(true)

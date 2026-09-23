@@ -4,7 +4,6 @@ import idleUrl from "./assets/pulsar/idle.png";
 import lockedUrl from "./assets/pulsar/locked.png";
 import targetUrl from "./assets/pulsar/target.png";
 import hitUrl from "./assets/pulsar/hit.png";
-import trailUrl from "./assets/pulsar/trail.png";
 import {
   SkinBundle,
   Config,
@@ -23,7 +22,6 @@ const builtinImages = Object.fromEntries(
     locked: lockedUrl,
     target: targetUrl,
     hit: hitUrl,
-    trail: trailUrl,
   }).map(([key, source]) => {
     const image = new Image();
     image.src = source;
@@ -39,35 +37,43 @@ export function Flight({
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const [label, setLabel] = useState("");
-  const skinRef = useRef<{
-    bundle: SkinBundle;
-    images: Record<string, HTMLImageElement>;
-  } | null>(null);
+  const skinRef = useRef(
+    new Map<
+      string,
+      { bundle: SkinBundle; images: Record<string, HTMLImageElement> }
+    >(),
+  );
   useEffect(() => {
     let disposed = false;
-    skinRef.current = null;
-    if (native && config.skin !== "builtin") {
-      void invoke<SkinBundle>("load_skin", { id: config.skin })
-        .then(async (bundle) => {
-          const images: Record<string, HTMLImageElement> = {};
-          await Promise.all(
-            Object.entries(bundle.assets).map(async ([key, src]) => {
-              const image = new Image();
-              image.src = src;
-              await image.decode();
-              images[key] = image;
+    skinRef.current = new Map();
+    const ids = [...new Set([config.skin, ...config.skins])].filter(
+      (id) => id && id !== "builtin",
+    );
+    if (native) {
+      ids.forEach(
+        (id) =>
+          void invoke<SkinBundle>("load_skin", { id })
+            .then(async (bundle) => {
+              const images: Record<string, HTMLImageElement> = {};
+              await Promise.all(
+                Object.entries(bundle.assets).map(async ([key, src]) => {
+                  const image = new Image();
+                  image.src = src;
+                  await image.decode();
+                  images[key] = image;
+                }),
+              );
+              if (!disposed) skinRef.current.set(id, { bundle, images });
+            })
+            .catch(() => {
+              if (!disposed) setLabel("部分皮肤无效，已回退到原创星脉");
             }),
-          );
-          if (!disposed) skinRef.current = { bundle, images };
-        })
-        .catch(() => {
-          if (!disposed) setLabel("皮肤无效，已回退到原创星脉");
-        });
+      );
     }
     return () => {
       disposed = true;
     };
-  }, [config.skin]);
+  }, [config.skin, config.skins]);
   useEffect(() => {
     const canvas = ref.current!,
       ctx = canvas.getContext("2d")!;
@@ -84,6 +90,7 @@ export function Flight({
     let pos = { x: 0, y: 0 },
       activeIndex: number | null = null,
       positions = Array.from({ length: 10 }, () => ({ x: 0, y: 0 })),
+      trails = Array.from({ length: 10 }, () => [] as TrailParticle[]),
       p: Frame | null = null;
     let audio: AudioContext | null = null;
     const sound = (kind: "capture" | "locked" | "launch") => {
@@ -262,14 +269,30 @@ export function Flight({
         pos.y = (p.y - p.origin_y) / p.scale;
       }
       for (let n = 0; n < config.count; n++) {
-        const idle = orbitPosition(n, clock, r.width, r.height);
-        const next = orbitPosition(n, clock + 0.035, r.width, r.height);
+        const idle = orbitPosition(n, config.count, clock, r.width, r.height);
+        const next = orbitPosition(
+          n,
+          config.count,
+          clock + 0.035,
+          r.width,
+          r.height,
+        );
         const isActive = activeIndex === n && !preview;
         const position = isActive && state.phase !== "idle" ? pos : idle;
         positions[n] = { ...position };
         const phase = isActive ? state.phase : "idle";
         const angle =
           phase === "idle" ? Math.atan2(next.y - idle.y, next.x - idle.x) : 0;
+        updateAndDrawTrail(
+          ctx,
+          trails[n],
+          position,
+          clock,
+          n,
+          config.trail,
+          dt,
+          phase !== "idle",
+        );
         ctx.save();
         ctx.translate(position.x, position.y);
         ctx.rotate(angle);
@@ -277,7 +300,9 @@ export function Flight({
           config.size * (phase === "locked" ? 1.1 : 1),
           config.size * (phase === "locked" ? 1.1 : 1),
         );
-        const skin = skinRef.current;
+        const skinId = config.skins[n] || config.skin;
+        const skin =
+          skinId === "builtin" ? undefined : skinRef.current.get(skinId);
         if (skin) {
           const key = ["locked", "target", "hit"].includes(phase)
             ? phase
@@ -287,23 +312,19 @@ export function Flight({
           const fw = img.width / a.frames,
             frame = Math.floor(clock * a.fps) % a.frames;
           const size = 60 * skin.bundle.manifest.assetScale;
-          const trail = skin.images[skin.bundle.manifest.trail];
-          ctx.globalAlpha = config.trail;
-          ctx.drawImage(trail, -130, -12, 110, 24);
-          ctx.globalAlpha = 1;
-          ctx.drawImage(
+          drawMeshSprite(
+            ctx,
             img,
+            size,
             frame * fw,
-            0,
             fw,
             img.height,
-            -size / 2,
-            (-size * img.height) / fw / 2,
-            size,
-            (size * img.height) / fw,
+            clock,
+            n,
+            phase,
           );
         } else {
-          drawBuiltinSprite(ctx, builtinImages, config.trail, phase);
+          drawBuiltinSprite(ctx, builtinImages, phase, clock, n);
         }
         ctx.restore();
       }
@@ -344,35 +365,152 @@ export function Flight({
 }
 function orbitPosition(
   index: number,
+  count: number,
   clock: number,
   width: number,
   height: number,
 ) {
-  const phase = (index * 0.61803398875) % 1;
-  const progress = (clock * (0.055 + (index % 3) * 0.006) + phase) % 1;
-  const lane = 0.17 + ((index * 3) % 7) * 0.105;
-  const arc = Math.sin(progress * Math.PI * 2 + index * 0.72);
-  const bob = Math.sin(progress * Math.PI * 6 + index) * 0.018;
+  // Companions hold a home position and make the slow vertical/depth motion
+  // seen in game, instead of continuously crossing the whole desktop.
+  const columns = Math.min(5, Math.max(1, count));
+  const column = index % columns;
+  const row = Math.floor(index / columns);
+  const phase = index * 1.37;
+  const horizontal =
+    columns === 1 ? 0.5 : 0.15 + (column / (columns - 1)) * 0.7;
+  const homeX = width * horizontal;
+  const homeY = height * (count > 5 ? 0.3 + row * 0.4 : 0.48);
+  const foreAft = Math.sin(clock * 0.72 + phase) * 24;
+  const vertical = Math.sin(clock * 1.05 + phase * 0.83) * 17;
   return {
-    x: width * (-0.1 + progress * 1.2),
-    y: height * (lane + arc * 0.055 + bob),
+    x: homeX + foreAft,
+    y: homeY + vertical,
   };
 }
 function drawBuiltinSprite(
   ctx: CanvasRenderingContext2D,
   images: Record<string, HTMLImageElement>,
-  trail: number,
   phase: string,
+  clock: number,
+  index: number,
 ) {
   const key = ["locked", "target", "hit"].includes(phase) ? phase : "idle";
-  if (!images[key].complete || !images.trail.complete) return;
-  ctx.globalAlpha = trail;
-  ctx.drawImage(images.trail, -142, -25, 126, 50);
-  ctx.globalAlpha = 1;
+  if (!images[key].complete) return;
   ctx.shadowBlur = phase === "idle" ? 8 : 20;
   ctx.shadowColor = phase === "target" ? "#ff68b8" : "#52eeff";
-  ctx.drawImage(images[key], -58, -39, 116, 78);
+  drawMeshSprite(
+    ctx,
+    images[key],
+    116,
+    0,
+    images[key].width,
+    images[key].height,
+    clock,
+    index,
+    phase,
+  );
   ctx.shadowBlur = 0;
+}
+
+type TrailParticle = {
+  x: number;
+  y: number;
+  age: number;
+  life: number;
+  size: number;
+  hue: number;
+};
+
+function updateAndDrawTrail(
+  ctx: CanvasRenderingContext2D,
+  particles: TrailParticle[],
+  position: { x: number; y: number },
+  clock: number,
+  index: number,
+  amount: number,
+  dt: number,
+  active: boolean,
+) {
+  if (amount > 0.01) {
+    particles.push({
+      x: position.x - 30 + Math.sin(clock * 4 + index) * 5,
+      y: position.y + Math.cos(clock * 3.1 + index) * 5,
+      age: 0,
+      life: active ? 0.42 : 0.8,
+      size: 2.5 + ((index * 7 + particles.length) % 4),
+      hue: index % 3 === 0 ? 47 : index % 3 === 1 ? 184 : 324,
+    });
+  }
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const particle = particles[i];
+    particle.age += dt;
+    if (particle.age >= particle.life) {
+      particles.splice(i, 1);
+      continue;
+    }
+    particle.x -= dt * (active ? 95 : 24);
+    particle.y += Math.sin(clock * 5 + i) * dt * 8;
+    const alpha = (1 - particle.age / particle.life) * amount;
+    const radius = particle.size * (0.6 + particle.age / particle.life);
+    ctx.fillStyle = `hsla(${particle.hue} 95% 70% / ${alpha})`;
+    ctx.shadowBlur = radius * 4;
+    ctx.shadowColor = `hsla(${particle.hue} 100% 65% / ${alpha})`;
+    ctx.beginPath();
+    if (i % 4 === 0) {
+      ctx.moveTo(particle.x, particle.y - radius * 1.8);
+      ctx.lineTo(particle.x + radius, particle.y);
+      ctx.lineTo(particle.x, particle.y + radius * 1.8);
+      ctx.lineTo(particle.x - radius, particle.y);
+      ctx.closePath();
+    } else {
+      ctx.arc(particle.x, particle.y, radius, 0, Math.PI * 2);
+    }
+    ctx.fill();
+  }
+  if (particles.length > 42) particles.splice(0, particles.length - 42);
+  ctx.restore();
+}
+
+function drawMeshSprite(
+  ctx: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  width: number,
+  sourceX: number,
+  sourceWidth: number,
+  sourceHeight: number,
+  clock: number,
+  index: number,
+  phase: string,
+) {
+  // A lightweight strip mesh gives every existing PNG skin articulated motion:
+  // the tail bends most, the body breathes, and the head stays readable.
+  const height = (width * sourceHeight) / sourceWidth;
+  const strips = 14;
+  const sourceStrip = sourceWidth / strips;
+  const destinationStrip = width / strips;
+  const energy = phase === "idle" ? 1 : 0.35;
+  const breathe = 1 + Math.sin(clock * 1.7 + index) * 0.025 * energy;
+  ctx.scale(1, breathe);
+  for (let strip = 0; strip < strips; strip++) {
+    const t = strip / (strips - 1);
+    const tailWeight = Math.pow(1 - t, 2.2);
+    const wave =
+      Math.sin(clock * 3.2 + index * 0.9 + t * 3.4) * 7 * tailWeight * energy;
+    const tilt = Math.sin(clock * 1.05 + index) * 2.5 * (t - 0.5) * energy;
+    ctx.drawImage(
+      image,
+      sourceX + strip * sourceStrip,
+      0,
+      sourceStrip,
+      sourceHeight,
+      -width / 2 + strip * destinationStrip,
+      -height / 2 + wave + tilt,
+      destinationStrip + 1,
+      height,
+    );
+  }
 }
 function drawStatusPill(
   ctx: CanvasRenderingContext2D,

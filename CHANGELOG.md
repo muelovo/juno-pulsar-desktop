@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0] - 2026-09-23
+
+- Keep overlay WebViews alive across Win+D by using Explorer PID and monitor topology as the stable lifecycle identity, and restore Show Desktop-hidden overlays without activation.
+- Replace desktop-crossing paths with slow anchored vertical and fore/aft companion motion.
+- Render procedural glowing particle trails instead of stretching a static trail texture.
+- Apply strip-mesh deformation to existing PNG skins for breathing and tail movement while preserving skin v1 compatibility.
+- Allow each of up to ten companions to use a different installed skin.
+
 ## [0.2.1] - 2026-09-23
 
 - Restore the proven visible top-level overlay fallback and mark it as a non-activating tool window so Win+D does not minimize it.
