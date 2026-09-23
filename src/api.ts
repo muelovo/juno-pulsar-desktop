@@ -16,12 +16,13 @@ export interface Config {
   paused: boolean;
   skin: string;
   skins: string[];
+  render_revision: number;
 }
 export const defaults: Config = {
   speed: 1,
   count: 5,
   size: 1,
-  fps: 30,
+  fps: 60,
   trail: 0.7,
   sound: true,
   monitor: "primary",
@@ -31,6 +32,7 @@ export const defaults: Config = {
   paused: false,
   skin: "builtin",
   skins: [],
+  render_revision: 1,
 };
 export interface Target {
   path: string;

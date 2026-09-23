@@ -90,7 +90,7 @@ export function Flight({
     let pos = { x: 0, y: 0 },
       activeIndex: number | null = null,
       positions = Array.from({ length: 10 }, () => ({ x: 0, y: 0 })),
-      trails = Array.from({ length: 10 }, () => [] as TrailParticle[]),
+      trails = Array.from({ length: 10 }, () => createTrailState()),
       p: Frame | null = null;
     let audio: AudioContext | null = null;
     const sound = (kind: "capture" | "locked" | "launch") => {
@@ -244,7 +244,7 @@ export function Flight({
     };
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
-      if (now - last < 1000 / config.fps) return;
+      if (now - last < 1000 / config.fps - 0.5) return;
       const dt = Math.min((now - prev) / 1000, 0.05);
       prev = now;
       last = now;
@@ -270,32 +270,13 @@ export function Flight({
       }
       for (let n = 0; n < config.count; n++) {
         const idle = orbitPosition(n, config.count, clock, r.width, r.height);
-        const next = orbitPosition(
-          n,
-          config.count,
-          clock + 0.035,
-          r.width,
-          r.height,
-        );
         const isActive = activeIndex === n && !preview;
         const position = isActive && state.phase !== "idle" ? pos : idle;
         positions[n] = { ...position };
         const phase = isActive ? state.phase : "idle";
-        const angle =
-          phase === "idle" ? Math.atan2(next.y - idle.y, next.x - idle.x) : 0;
-        updateAndDrawTrail(
-          ctx,
-          trails[n],
-          position,
-          clock,
-          n,
-          config.trail,
-          dt,
-          phase !== "idle",
-        );
+        updateAndDrawTrail(ctx, trails[n], position, now, n, config.trail, dt);
         ctx.save();
         ctx.translate(position.x, position.y);
-        ctx.rotate(angle);
         ctx.scale(
           config.size * (phase === "locked" ? 1.1 : 1),
           config.size * (phase === "locked" ? 1.1 : 1),
@@ -370,22 +351,38 @@ function orbitPosition(
   width: number,
   height: number,
 ) {
-  // Companions hold a home position and make the slow vertical/depth motion
-  // seen in game, instead of continuously crossing the whole desktop.
-  const columns = Math.min(5, Math.max(1, count));
-  const column = index % columns;
-  const row = Math.floor(index / columns);
-  const phase = index * 1.37;
-  const horizontal =
-    columns === 1 ? 0.5 : 0.15 + (column / (columns - 1)) * 0.7;
-  const homeX = width * horizontal;
-  const homeY = height * (count > 5 ? 0.3 + row * 0.4 : 0.48);
-  const foreAft = Math.sin(clock * 0.72 + phase) * 24;
-  const vertical = Math.sin(clock * 1.05 + phase * 0.83) * 17;
+  const phase = (index * 0.61803398875) % 1;
+  const cycle = (clock * (0.065 + (index % 3) * 0.006) + phase) % 2;
+  const progress = cycle <= 1 ? cycle : 2 - cycle;
+  const laneCount = Math.min(5, Math.max(1, count));
+  const lane = index % laneCount;
+  const row = Math.floor(index / laneCount);
+  const baseY =
+    height *
+    (count > 5
+      ? 0.3 + row * 0.4 + (lane - (laneCount - 1) / 2) * 0.025
+      : 0.2 + ((lane + 0.5) / laneCount) * 0.6);
+  const jitter = directionalJitter(clock * 0.72 + index * 0.57);
+  const broadArc = Math.sin(progress * Math.PI) * (index % 2 ? -22 : 22);
   return {
-    x: homeX + foreAft,
-    y: homeY + vertical,
+    x: width * (-0.08 + progress * 1.16) + jitter.x,
+    y: baseY + broadArc + jitter.y,
   };
+}
+
+function directionalJitter(clock: number) {
+  const points = [
+    { x: 0, y: -8 },
+    { x: 8, y: 0 },
+    { x: 0, y: 8 },
+    { x: -8, y: 0 },
+  ];
+  const segment = Math.floor(clock) % points.length;
+  const raw = clock - Math.floor(clock);
+  const t = raw * raw * (3 - 2 * raw);
+  const from = points[segment];
+  const to = points[(segment + 1) % points.length];
+  return { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
 }
 function drawBuiltinSprite(
   ctx: CanvasRenderingContext2D,
@@ -396,7 +393,7 @@ function drawBuiltinSprite(
 ) {
   const key = ["locked", "target", "hit"].includes(phase) ? phase : "idle";
   if (!images[key].complete) return;
-  ctx.shadowBlur = phase === "idle" ? 8 : 20;
+  ctx.shadowBlur = phase === "idle" ? 0 : 12;
   ctx.shadowColor = phase === "target" ? "#ff68b8" : "#52eeff";
   drawMeshSprite(
     ctx,
@@ -418,58 +415,66 @@ type TrailParticle = {
   age: number;
   life: number;
   size: number;
-  hue: number;
+  color: number;
 };
+
+type TrailState = {
+  particles: TrailParticle[];
+  nextEmit: number;
+  lastX: number;
+  lastY: number;
+};
+
+function createTrailState(): TrailState {
+  return { particles: [], nextEmit: 0, lastX: Number.NaN, lastY: Number.NaN };
+}
 
 function updateAndDrawTrail(
   ctx: CanvasRenderingContext2D,
-  particles: TrailParticle[],
+  trail: TrailState,
   position: { x: number; y: number },
-  clock: number,
+  now: number,
   index: number,
   amount: number,
   dt: number,
-  active: boolean,
 ) {
-  if (amount > 0.01) {
-    particles.push({
-      x: position.x - 30 + Math.sin(clock * 4 + index) * 5,
-      y: position.y + Math.cos(clock * 3.1 + index) * 5,
+  const dx = Number.isFinite(trail.lastX) ? position.x - trail.lastX : 1;
+  const dy = Number.isFinite(trail.lastY) ? position.y - trail.lastY : 0;
+  const distance = Math.hypot(dx, dy);
+  const directionX = distance > 0.1 ? dx / distance : 1;
+  const directionY = distance > 0.1 ? dy / distance : 0;
+  trail.lastX = position.x;
+  trail.lastY = position.y;
+  if (amount > 0.01 && now >= trail.nextEmit) {
+    trail.nextEmit = now + 55;
+    trail.particles.push({
+      x: position.x - directionX * 37,
+      y: position.y - directionY * 20,
       age: 0,
-      life: active ? 0.42 : 0.8,
-      size: 2.5 + ((index * 7 + particles.length) % 4),
-      hue: index % 3 === 0 ? 47 : index % 3 === 1 ? 184 : 324,
+      life: 0.58,
+      size: 2 + ((index * 7 + trail.particles.length) % 3),
+      color: (index + trail.particles.length) % 3,
     });
   }
   ctx.save();
   ctx.globalCompositeOperation = "lighter";
-  for (let i = particles.length - 1; i >= 0; i--) {
-    const particle = particles[i];
+  const colors = ["255 210 92", "111 239 255", "255 121 190"];
+  for (let i = trail.particles.length - 1; i >= 0; i--) {
+    const particle = trail.particles[i];
     particle.age += dt;
     if (particle.age >= particle.life) {
-      particles.splice(i, 1);
+      trail.particles.splice(i, 1);
       continue;
     }
-    particle.x -= dt * (active ? 95 : 24);
-    particle.y += Math.sin(clock * 5 + i) * dt * 8;
     const alpha = (1 - particle.age / particle.life) * amount;
     const radius = particle.size * (0.6 + particle.age / particle.life);
-    ctx.fillStyle = `hsla(${particle.hue} 95% 70% / ${alpha})`;
-    ctx.shadowBlur = radius * 4;
-    ctx.shadowColor = `hsla(${particle.hue} 100% 65% / ${alpha})`;
+    ctx.fillStyle = `rgb(${colors[particle.color]} / ${alpha})`;
     ctx.beginPath();
-    if (i % 4 === 0) {
-      ctx.moveTo(particle.x, particle.y - radius * 1.8);
-      ctx.lineTo(particle.x + radius, particle.y);
-      ctx.lineTo(particle.x, particle.y + radius * 1.8);
-      ctx.lineTo(particle.x - radius, particle.y);
-      ctx.closePath();
-    } else {
-      ctx.arc(particle.x, particle.y, radius, 0, Math.PI * 2);
-    }
+    ctx.arc(particle.x, particle.y, radius, 0, Math.PI * 2);
     ctx.fill();
   }
-  if (particles.length > 42) particles.splice(0, particles.length - 42);
+  if (trail.particles.length > 12)
+    trail.particles.splice(0, trail.particles.length - 12);
   ctx.restore();
 }
 
@@ -487,7 +492,7 @@ function drawMeshSprite(
   // A lightweight strip mesh gives every existing PNG skin articulated motion:
   // the tail bends most, the body breathes, and the head stays readable.
   const height = (width * sourceHeight) / sourceWidth;
-  const strips = 14;
+  const strips = 8;
   const sourceStrip = sourceWidth / strips;
   const destinationStrip = width / strips;
   const energy = phase === "idle" ? 1 : 0.35;

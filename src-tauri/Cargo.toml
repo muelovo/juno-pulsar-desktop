@@ -1,6 +1,6 @@
 [package]
 name = "juno-pulsar-desktop"
-version = "0.3.0"
+version = "0.3.1"
 description = "An unofficial, local-only desktop companion"
 authors = ["Juno Pulsar Desktop contributors"]
 edition = "2021"

@@ -153,7 +153,7 @@ function App() {
                 value={c.fps}
                 onChange={(e) => void update({ ...c, fps: +e.target.value })}
               >
-                {[15, 30, 60].map((n) => (
+                {[30, 60].map((n) => (
                   <option key={n} value={n}>
                     {n} FPS
                   </option>

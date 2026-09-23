@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1] - 2026-09-23
+
+- Restore smooth left/right desktop traversal with a small sequential up/right/down/left hover motion and no sprite rotation.
+- Attach trail emission to the actual movement vector so effects originate behind the companion in either direction.
+- Reduce trail cost with timed emission, a 12-particle cap, simpler additive circles and no per-particle blur.
+- Reduce sprite deformation from 14 to 8 strips and disable idle shadow blur.
+- Migrate existing configurations to 60 FPS once while retaining the 30 FPS user option.
+
 ## [0.3.0] - 2026-09-23
 
 - Keep overlay WebViews alive across Win+D by using Explorer PID and monitor topology as the stable lifecycle identity, and restore Show Desktop-hidden overlays without activation.

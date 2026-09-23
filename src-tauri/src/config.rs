@@ -16,6 +16,8 @@ pub struct Config {
     pub paused: bool,
     pub skin: String,
     pub skins: Vec<String>,
+    #[serde(default)]
+    pub render_revision: u32,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -23,7 +25,7 @@ impl Default for Config {
             speed: 1.,
             count: 5,
             size: 1.,
-            fps: 30,
+            fps: 60,
             trail: 0.7,
             sound: true,
             monitor: "primary".into(),
@@ -33,6 +35,7 @@ impl Default for Config {
             paused: false,
             skin: "builtin".into(),
             skins: Vec::new(),
+            render_revision: 1,
         }
     }
 }
@@ -43,13 +46,14 @@ impl Config {
             || !(1..=10).contains(&self.count)
             || !self.size.is_finite()
             || !(0.5..=2.).contains(&self.size)
-            || ![15, 30, 60].contains(&self.fps)
+            || ![30, 60].contains(&self.fps)
             || !self.trail.is_finite()
             || !(0.0..=1.).contains(&self.trail)
             || self.skin.len() > 80
             || self.skins.len() > 10
             || self.skins.iter().any(|skin| skin.len() > 80)
             || self.monitor.len() > 200
+            || self.render_revision > 1
         {
             return Err("invalid_configuration".into());
         }
@@ -57,11 +61,17 @@ impl Config {
     }
 }
 pub fn load(dir: &Path) -> Config {
-    std::fs::read(dir.join("config.json"))
+    let mut config = std::fs::read(dir.join("config.json"))
         .ok()
         .and_then(|b| serde_json::from_slice::<Config>(&b).ok())
         .filter(|c| c.validate().is_ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if config.render_revision == 0 {
+        config.fps = 60;
+        config.render_revision = 1;
+        let _ = save(dir, &config);
+    }
+    config
 }
 pub fn save(dir: &Path, config: &Config) -> Result<(), String> {
     config.validate()?;
@@ -136,5 +146,25 @@ mod tests {
         assert!(c.validate().is_ok());
         c.skins.push("one-too-many".into());
         assert!(c.validate().is_err())
+    }
+    #[test]
+    fn old_config_migrates_to_sixty_fps_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut old = Config {
+            fps: 30,
+            render_revision: 0,
+            ..Config::default()
+        };
+        std::fs::write(
+            dir.path().join("config.json"),
+            serde_json::to_vec(&old).unwrap(),
+        )
+        .unwrap();
+        old = load(dir.path());
+        assert_eq!(old.fps, 60);
+        assert_eq!(old.render_revision, 1);
+        old.fps = 30;
+        save(dir.path(), &old).unwrap();
+        assert_eq!(load(dir.path()).fps, 30);
     }
 }
