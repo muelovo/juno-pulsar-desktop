@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0] - 2026-09-23
+
+- Flip the sprite and tail origin when its horizontal travel reverses, with a small dead zone around turning points.
+- Add four selectable flight styles: cruise, figure eight, swoop, and hover.
+- Add the original, reference-inspired “希望之心·晶翼” skin package with a dark violet body, ivory belly, emerald eye, and faceted amber wings.
+- Include the new one-click import skin in portable packages.
+
 ## [0.3.1] - 2026-09-23
 
 - Restore smooth left/right desktop traversal with a small sequential up/right/down/left hover motion and no sprite rotation.

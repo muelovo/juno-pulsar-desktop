@@ -18,6 +18,7 @@ pub struct Config {
     pub skins: Vec<String>,
     #[serde(default)]
     pub render_revision: u32,
+    pub motion: String,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -36,6 +37,7 @@ impl Default for Config {
             skin: "builtin".into(),
             skins: Vec::new(),
             render_revision: 1,
+            motion: "cruise".into(),
         }
     }
 }
@@ -54,6 +56,7 @@ impl Config {
             || self.skins.iter().any(|skin| skin.len() > 80)
             || self.monitor.len() > 200
             || self.render_revision > 1
+            || !["cruise", "figure8", "swoop", "hover"].contains(&self.motion.as_str())
         {
             return Err("invalid_configuration".into());
         }

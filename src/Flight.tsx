@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { initial, step, State } from "./machine";
+import { flightPosition, tailOrigin, travelFacing } from "./motion";
 import idleUrl from "./assets/pulsar/idle.png";
 import lockedUrl from "./assets/pulsar/locked.png";
 import targetUrl from "./assets/pulsar/target.png";
@@ -91,6 +92,7 @@ export function Flight({
       activeIndex: number | null = null,
       positions = Array.from({ length: 10 }, () => ({ x: 0, y: 0 })),
       trails = Array.from({ length: 10 }, () => createTrailState()),
+      facings = Array.from({ length: 10 }, () => 1 as 1 | -1),
       p: Frame | null = null;
     let audio: AudioContext | null = null;
     const sound = (kind: "capture" | "locked" | "launch") => {
@@ -269,21 +271,39 @@ export function Flight({
         pos.y = (p.y - p.origin_y) / p.scale;
       }
       for (let n = 0; n < config.count; n++) {
-        const idle = orbitPosition(n, config.count, clock, r.width, r.height);
+        const idle = flightPosition(
+          config.motion,
+          n,
+          config.count,
+          clock,
+          r.width,
+          r.height,
+        );
         const isActive = activeIndex === n && !preview;
         const position = isActive && state.phase !== "idle" ? pos : idle;
+        facings[n] = travelFacing(facings[n], position.x, trails[n].lastX);
         positions[n] = { ...position };
         const phase = isActive ? state.phase : "idle";
-        updateAndDrawTrail(ctx, trails[n], position, now, n, config.trail, dt);
-        ctx.save();
-        ctx.translate(position.x, position.y);
-        ctx.scale(
-          config.size * (phase === "locked" ? 1.1 : 1),
-          config.size * (phase === "locked" ? 1.1 : 1),
-        );
         const skinId = config.skins[n] || config.skin;
         const skin =
           skinId === "builtin" ? undefined : skinRef.current.get(skinId);
+        updateAndDrawTrail(
+          ctx,
+          trails[n],
+          position,
+          facings[n],
+          config.size * (skin ? skin.bundle.manifest.assetScale : 1.55),
+          now,
+          n,
+          config.trail,
+          dt,
+        );
+        ctx.save();
+        ctx.translate(position.x, position.y);
+        ctx.scale(
+          facings[n] * config.size * (phase === "locked" ? 1.1 : 1),
+          config.size * (phase === "locked" ? 1.1 : 1),
+        );
         if (skin) {
           const key = ["locked", "target", "hit"].includes(phase)
             ? phase
@@ -344,46 +364,6 @@ export function Flight({
     />
   );
 }
-function orbitPosition(
-  index: number,
-  count: number,
-  clock: number,
-  width: number,
-  height: number,
-) {
-  const phase = (index * 0.61803398875) % 1;
-  const cycle = (clock * (0.065 + (index % 3) * 0.006) + phase) % 2;
-  const progress = cycle <= 1 ? cycle : 2 - cycle;
-  const laneCount = Math.min(5, Math.max(1, count));
-  const lane = index % laneCount;
-  const row = Math.floor(index / laneCount);
-  const baseY =
-    height *
-    (count > 5
-      ? 0.3 + row * 0.4 + (lane - (laneCount - 1) / 2) * 0.025
-      : 0.2 + ((lane + 0.5) / laneCount) * 0.6);
-  const jitter = directionalJitter(clock * 0.72 + index * 0.57);
-  const broadArc = Math.sin(progress * Math.PI) * (index % 2 ? -22 : 22);
-  return {
-    x: width * (-0.08 + progress * 1.16) + jitter.x,
-    y: baseY + broadArc + jitter.y,
-  };
-}
-
-function directionalJitter(clock: number) {
-  const points = [
-    { x: 0, y: -8 },
-    { x: 8, y: 0 },
-    { x: 0, y: 8 },
-    { x: -8, y: 0 },
-  ];
-  const segment = Math.floor(clock) % points.length;
-  const raw = clock - Math.floor(clock);
-  const t = raw * raw * (3 - 2 * raw);
-  const from = points[segment];
-  const to = points[(segment + 1) % points.length];
-  return { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
-}
 function drawBuiltinSprite(
   ctx: CanvasRenderingContext2D,
   images: Record<string, HTMLImageElement>,
@@ -433,23 +413,21 @@ function updateAndDrawTrail(
   ctx: CanvasRenderingContext2D,
   trail: TrailState,
   position: { x: number; y: number },
+  facing: 1 | -1,
+  scale: number,
   now: number,
   index: number,
   amount: number,
   dt: number,
 ) {
-  const dx = Number.isFinite(trail.lastX) ? position.x - trail.lastX : 1;
-  const dy = Number.isFinite(trail.lastY) ? position.y - trail.lastY : 0;
-  const distance = Math.hypot(dx, dy);
-  const directionX = distance > 0.1 ? dx / distance : 1;
-  const directionY = distance > 0.1 ? dy / distance : 0;
   trail.lastX = position.x;
   trail.lastY = position.y;
   if (amount > 0.01 && now >= trail.nextEmit) {
     trail.nextEmit = now + 55;
+    const origin = tailOrigin(position, facing, scale);
     trail.particles.push({
-      x: position.x - directionX * 37,
-      y: position.y - directionY * 20,
+      x: origin.x,
+      y: origin.y,
       age: 0,
       life: 0.58,
       size: 2 + ((index * 7 + trail.particles.length) % 3),

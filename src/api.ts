@@ -17,6 +17,7 @@ export interface Config {
   skin: string;
   skins: string[];
   render_revision: number;
+  motion: "cruise" | "figure8" | "swoop" | "hover";
 }
 export const defaults: Config = {
   speed: 1,
@@ -33,6 +34,7 @@ export const defaults: Config = {
   skin: "builtin",
   skins: [],
   render_revision: 1,
+  motion: "cruise",
 };
 export interface Target {
   path: string;

@@ -133,6 +133,23 @@ function App() {
           ))}
           <div className="pair">
             <label>
+              飞行方式
+              <select
+                value={c.motion}
+                onChange={(e) =>
+                  void update({
+                    ...c,
+                    motion: e.target.value as Config["motion"],
+                  })
+                }
+              >
+                <option value="cruise">往返巡航</option>
+                <option value="figure8">双环穿梭</option>
+                <option value="swoop">波浪俯冲</option>
+                <option value="hover">原地游弋</option>
+              </select>
+            </label>
+            <label>
               数量
               <select
                 value={c.count}
